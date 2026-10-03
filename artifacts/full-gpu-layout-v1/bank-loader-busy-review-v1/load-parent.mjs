@@ -1,0 +1,3 @@
+// Fixed pre-route parent, independently selected from accepted response tip.
+import assert from'node:assert/strict';import{loadBase as previous}from'../memory/fabric-colocation-v2/bank-response-channel0-v1/frame.mjs';import{read,insert}from'./independent-network.mjs';
+export function loadParent(){read('../memory/fabric-colocation-v2/bank-response-channel0-v1/source-manifest.json','0adabdb883bed8b3fbd242a18dd9cbe454d8fe680829f733e38364f6b55bc6a4');const b=previous(),d=read('../memory/fabric-colocation-v2/bank-response-channel0-v1/delta.json','1fe8d821109b94030001c417250f4a18fca3b4b0485e555a2b922a12ee300fa5');insert(b.world,d.new_cells);b.rows.push(...d.new_cells);assert.equal(b.world.size,2261124);return{base:b.world,rows:b.rows};}

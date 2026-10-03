@@ -1,0 +1,32 @@
+// Dependency and phase arithmetic only; not scheduled-event bounds.
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';
+import{makeGlobalClockedControl}from'../../../hardware/full-gpu-global-clocked-control-v1.mjs';
+import{makeGlobalSampledControl}from'../../../hardware/full-gpu-global-sampled-control-v1.mjs';
+import{makeGlobalHeldCommands}from'../../../hardware/full-gpu-global-held-commands-v1.mjs';
+import{makeGlobalControlFeedback}from'../../../hardware/full-gpu-global-control-feedback-v3.mjs';
+import{makeGlobalControlLogic}from'../../../hardware/full-gpu-global-control-logic-v3.mjs';
+import{makeGlobalInputSampler,makeSampleConjunctions}from'../../../hardware/full-gpu-global-input-sampler-v1.mjs';
+import{makeSignalDescent}from'../../../hardware/full-gpu-signal-descent.mjs';
+import{rotatePosition}from'../../../hardware/gpu-layout-assembly.mjs';
+import{routeDelays}from'../../../scripts/check-route-delay.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z),d=makeGlobalClockedControl(),sampled=makeGlobalSampledControl(),held=makeGlobalHeldCommands(),feedback=makeGlobalControlFeedback(),sampler=makeGlobalInputSampler(),edges=[];
+assert.deepEqual(d,JSON.parse(readFileSync(new URL('design.json',import.meta.url))));
+function absorb(g,origin=P(0,0,0),q=0){const T=p=>add(rotatePosition(p,q),origin),E=(a,b)=>edges.push({from:T(a),to:T(b)});for(const e of g.edges??[])E(e.from,e.to);for(const c of g.columns??[])for(let y=c.bottom;y<(c.output_y??c.top);y++)E(P(c.x,y,c.z),P(c.x,y+1,c.z));for(const t of g.towers??[])for(let y=t.first_y;y<t.last_y;y++)E(P(t.x,y,t.z),P(t.x,y+1,t.z));for(const c of g.or_columns??[])for(let y=1;y<c.output_y;y++)E(P(c.x,y,3),P(c.x,y+1,3));
+ for(const p of g.parents??[])if(p.parameters?.drop!==undefined){const desc=makeSignalDescent(p.parameters),Q=p.quarter_turns??0,path=desc.path.map(v=>add(rotatePosition(v,Q),p.origin));for(let i=1;i<path.length;i++)E(path[i-1],path[i]);}
+}
+for(const g of[d,sampled,held,feedback,sampler])absorb(g);
+absorb(makeGlobalControlLogic(),P(150,64,0));absorb(makeSampleConjunctions(),P(0,64,0));
+for(const l of feedback.links){const path=makeSignalDescent({drop:l.source.y-l.next_input.y}).path.map(p=>add(rotatePosition(p,1),P(l.source.x,l.source.y,20+12*l.bit)));for(let i=1;i<path.length;i++)edges.push({from:path[i-1],to:path[i]});}
+const graph=new Map();for(const e of edges){if(!graph.has(K(e.from)))graph.set(K(e.from),new Set());graph.get(K(e.from)).add(K(e.to));}
+const sources=[...feedback.ports.state.bits.map((v,b)=>({name:'CURRENT_'+b,position:v.position})),...sampler.samples.map(v=>({name:'SAMPLE_'+v.name,position:v.source}))],targets=[...feedback.links.map(l=>({name:'NEXT_'+l.bit,position:l.next_input})),...held.connections.map(c=>({name:'HELD_'+c.name,position:c.destination}))],connections=[];
+for(const source of sources){const seen=new Set([K(source.position)]),queue=[K(source.position)];for(let i=0;i<queue.length;i++)for(const n of graph.get(queue[i])??[])if(!seen.has(n)){seen.add(n);queue.push(n);}let count=0;for(const target of targets)if(seen.has(K(target.position))){connections.push({name:source.name+'__'+target.name,source:source.position,destination:target.position});count++;}assert(count>0,'Opaque/unrouted input '+source.name);}
+const dependencies=routeDelays({blocks:d.blocks,edges,connections},{requireNoninverting:false}),phase=routeDelays(d),path=Object.fromEntries(phase.routes.map(r=>[r.name,r.nominal_max_ticks]));
+// OPEN port -> input repeater -> actual alternating lock column -> side repeater.
+const banks=[{name:'A_next',phase:'A',width:4},{name:'A_commands',phase:'A',width:5},{name:'B_current',phase:'B',width:4},{name:'B_sample0',phase:'B',width:8},{name:'B_sample1',phase:'B',width:7}].map(b=>({...b,phase_route_ticks:path[b.name],first_lock_ticks:6,last_lock_ticks:4+2*(2*b.width-1)}));
+const maxAclose=Math.max(...banks.filter(b=>b.phase==='A').map(b=>b.phase_route_ticks+b.last_lock_ticks)),minAopen=Math.min(...banks.filter(b=>b.phase==='A').map(b=>b.phase_route_ticks+b.first_lock_ticks)),maxBclose=Math.max(...banks.filter(b=>b.phase==='B').map(b=>b.phase_route_ticks+b.last_lock_ticks)),minBopen=Math.min(...banks.filter(b=>b.phase==='B').map(b=>b.phase_route_ticks+b.first_lock_ticks));
+const maxCombo=Math.max(...dependencies.routes.map(r=>r.nominal_max_ticks)),postStoreTicks=4,AtoB=d.nominal_clock.a_to_b_gap_ticks+minBopen-maxAclose,BtoA=d.nominal_clock.b_to_a_gap_ticks+minAopen-maxBclose,settleMargin=BtoA-postStoreTicks-maxCombo;
+assert(AtoB>0);assert(BtoA>0);assert(settleMargin>0,'Nominal path arithmetic exceeds settling window');
+// A real route deletion must be refused; these are not counts from metadata only.
+const bad=structuredClone(d);bad.edges=bad.edges.filter(e=>K(e.to)!==K(bad.connections[0].normalizer));assert.throws(()=>routeDelays(bad));
+const r={status:'global_clock_nominal_dependency_and_bank_window_arithmetic_pass',physical_data_dependency_paths:dependencies.routes.length,phase_paths:phase.routes,banks,maximum_combinational_dependency_ticks:maxCombo,conservative_after_storage_output_ticks:postStoreTicks,nominal_A_close_to_B_open_gap_ticks:AtoB,nominal_B_close_to_A_open_gap_ticks:BtoA,nominal_data_settle_margin_ticks:settleMargin,numeric_physical_bounds_established:false,native_acceptance:false,model:dependencies.model,limits:['Exact authored directed geometry and nominal scheduled-device counts only. No Minecraft event simulation, measured extrema, burnout behavior or pulse transport proof.','Storage edges are deliberately cut: sources are actual CURRENT/sample outputs, targets are actual NEXT/held-command data inputs. No opaque parent is treated as zero-delay logic.','All lock paths use an ideal2-tick torch/repeater transition model. State/data setup, propagation skew and pulse closure still require physical bounds and later native checks.','External raw levels must remain held through capture and preserve protocol epochs. BOOT must span actual initialization; direct loader inhibition must be present.']};
+writeFileSync(new URL('nominal-dependencies.json',import.meta.url),JSON.stringify(dependencies,null,2)+'\n');writeFileSync(new URL('nominal-timing-checks.json',import.meta.url),JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify({...r,phase_paths:phase.routes.map(r=>({name:r.name,ticks:r.nominal_max_ticks})),banks:undefined}));

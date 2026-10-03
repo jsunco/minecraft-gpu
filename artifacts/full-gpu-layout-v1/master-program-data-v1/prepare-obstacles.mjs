@@ -1,0 +1,5 @@
+import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';
+import{iterateObstacles,sourceBindings}from'../floorplan-v3/obstacles.mjs';
+const bounds={x:[-1120,180],z:[-3230,1090]},pins=await sourceBindings(),cells=[],palette=[],pal=new Map(),instances=[],ids=new Map(),counts={};
+for await(const v of iterateObstacles({bounds,verify:false})){const key=JSON.stringify(v.block);if(!pal.has(key)){pal.set(key,palette.length);palette.push(v.block);}if(!ids.has(v.instance)){ids.set(v.instance,instances.length);instances.push({name:v.instance});counts[v.instance]=0;}const{x,y,z}=v.position;cells.push([x,y,z,pal.get(key),ids.get(v.instance)]);counts[v.instance]++;}
+const mp='artifacts/full-gpu-layout-v1/floorplan-v3/source-manifest.json';pins[mp]=createHash('sha256').update(readFileSync(mp)).digest('hex');const out={status:'exact_frame3_parent_and_five_route_obstacles',bounds,all_y:true,instances,palette,cells,counts,cell_count:cells.length,source_sha256:pins,native_acceptance:false};writeFileSync(new URL('./obstacles.json',import.meta.url),JSON.stringify(out)+'\n');console.log(JSON.stringify({cells:cells.length,counts,palette:palette.length}));

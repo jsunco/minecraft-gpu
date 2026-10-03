@@ -1,0 +1,38 @@
+// Actual final-block comparison and DCR low bits through mask logic into retained per-core payloads.
+import assert from'node:assert/strict';import{mkdirSync,writeFileSync}from'node:fs';import{join,resolve}from'node:path';import{fileURLToPath}from'node:url';
+import{makeDispatchStartupOverride}from'./full-gpu-dispatch-startup-override.mjs';import{makeSignalDescent}from'./full-gpu-signal-descent.mjs';import{materializeInstance}from'./gpu-layout-assembly.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,F={east:'west',west:'east',north:'south',south:'north'};
+export function makeDispatchPhaseDistribution(){
+ const map=new Map(),parents=[],routes=[],edges=[],connections=[],columns=[];let part='';
+ function insert(id,d,origin){const q=materializeInstance(d,{id,translation:origin});for(const v of q.blocks){assert(!map.has(K(v.position)),'Parent collision '+id+' '+K(v.position));map.set(K(v.position),{...v,part:id});}parents.push({id,origin,blocks:q.blocks.length});return q;}
+ const base=insert('override',makeDispatchStartupOverride(),P(0,0,0));
+ function put(p,id,properties){assert(!map.has(K(p)),'Collision '+part+' '+K(p)+' with '+map.get(K(p))?.part);map.set(K(p),{position:p,block:{id:'minecraft:'+id,...(properties?{properties}:{})},part});}
+ const solid=p=>put(p,'light_gray_concrete'),dev=(p,id,props)=>{solid({...p,y:p.y-1});put(p,id,props);},wire=p=>dev(p,'redstone_wire'),rep=(p,d)=>dev(p,'repeater',{facing:F[d],delay:'1'}),edge=(a,b)=>edges.push({from:a,to:b});
+ function route(name,ws,{branchPoints=[]}={}){ws=ws.filter((w,i)=>!i||w.some((v,k)=>v!==ws[i-1][k]));part=name;const path=[P(...ws[0])];for(let n=1;n<ws.length;n++){const a=ws[n-1],b=ws[n],delta=b.map((v,i)=>v-a[i]),steps=Math.abs(delta[0])+Math.abs(delta[2]);assert(steps&&(!delta[0]||!delta[2])&&(!delta[1]||Math.abs(delta[1])===steps),'Invalid segment '+name);for(let i=1;i<=steps;i++)path.push(P(...a.map((v,k)=>v+Math.sign(delta[k])*i)));}
+  const candidates=[-1];for(let i=1;i<path.length-1;i++){const a=path[i-1],p=path[i],b=path[i+1];if(!map.has(K(p))&&!branchPoints.some(q=>q.y===p.y&&Math.abs(q.x-p.x)+Math.abs(q.z-p.z)<=1)&&a.y===p.y&&b.y===p.y&&p.x-a.x===b.x-p.x&&p.z-a.z===b.z-p.z)candidates.push(i);}candidates.push(path.length);const costs=new Map([[-1,0]]),prev=new Map();for(const end of candidates.slice(1))for(const start of candidates){if(start>=end)break;if(!costs.has(start)||end-start>13)continue;const cost=costs.get(start)+(end===path.length?0:1);if(cost<(costs.get(end)??Infinity)){costs.set(end,cost);prev.set(end,start);}}assert(prev.has(path.length),'Unrefreshable '+name);const refresh=[];for(let i=prev.get(path.length);i!==-1;i=prev.get(i))refresh.push(i);
+  for(const[i,p]of path.entries()){if(map.has(K(p))){assert(i===0||i===path.length-1,'Internal overlap '+name+' '+K(p));assert.equal(map.get(K(p)).block.id,'minecraft:redstone_wire');}else if(refresh.includes(i)){const q=path[i+1];rep(p,q.x>p.x?'east':q.x<p.x?'west':q.z>p.z?'south':'north');}else wire(p);if(i)edge(path[i-1],p);}routes.push({name,path,refresh_indices:refresh.sort((a,b)=>a-b)});return path;
+ }
+ function column(name,x,z,bottom,outputY){assert(outputY>bottom&&(outputY-bottom)%4===1);part=name;for(let y=bottom;y<outputY;y++){if((y-bottom)%2===0)solid(P(x,y,z));else put(P(x,y,z),'redstone_torch');}put(P(x,outputY,z),'redstone_wire');columns.push({name,x,z,bottom,output_y:outputY});return P(x,outputY,z);}
+ const groups={a:['sequence_next_open','output_next_open','dispatched_phase_a','completed_phase_a'],b:['sequence_current_open','output_current_open','dispatched_phase_b','completed_phase_b','core0_payload_phase_b','core1_payload_phase_b']};
+ const ports={...base.ports};
+ for(const [phase,names]of Object.entries(groups)){
+  const isB=phase==='b',source=isB?P(-688,170,-260):P(-686,178,-276),rise=isB?6:2,busY=isB?-100:-76,input=P(isB?-736:-720,source.y+rise,-176),desc=insert('phase_'+phase+'_descent',makeSignalDescent({drop:input.y-busY}),input),out=desc.ports.output.bits[0],p=out.position,dir=out.travel,q=P(p.x+3*dir.x,p.y,p.z+3*dir.z);
+  parents.at(-1).parameters={drop:input.y-busY};part='phase_'+phase+'_source';rep(P(source.x-1,source.y,source.z),'west');wire(P(source.x-2,source.y,source.z));edge(source,P(source.x-1,source.y,source.z));edge(P(source.x-1,source.y,source.z),P(source.x-2,source.y,source.z));
+  route('phase_'+phase+'_depart',[[source.x-2,source.y,source.z],[source.x-2-rise,input.y,source.z],[input.x-2,input.y,source.z],[input.x-2,input.y,input.z],[input.x,input.y,input.z]]);
+  const corridor=isB?-420:-440;const branchXs=names.map((n,i)=>640+i*8);
+  // The south/east rail is below all parents; distinct taps fan out to local lifts.
+  const ws=[[p.x,p.y,p.z],[q.x,q.y,q.z]];if(dir.x<0)ws.push([q.x,busY,input.z-12],[input.x+12,busY,input.z-12]);else if(dir.z)ws.push([input.x+12,busY,q.z]);const tail=ws.at(-1);route('phase_'+phase+'_trunk',[...ws,[tail[0],busY,corridor],[branchXs.at(-1),busY,corridor]],{branchPoints:branchXs.slice(0,-1).map(x=>P(x,busY,corridor))});
+  for(const [i,name]of names.entries()){
+   const target=base.ports[name].bits[0].position,cx=target.x-3,cz=target.z,bottom=target.y-(isB?93:69)+4*i,x=branchXs[i],routeZ=540+i*8,travelY=busY+5+4*i,delta=bottom-travelY;
+   part=name+'_tap';rep(P(x,busY,corridor+1),'south');edge(P(x,busY,corridor),P(x,busY,corridor+1));edge(P(x,busY,corridor+1),P(x,busY,corridor+2));column(name+'_branch_level',x,corridor+2,busY,travelY);
+   // Each destination has an isolated routing level. Small phase-preserving lift returns to its port.
+   route(name+'_underlay',[[x,travelY,corridor+2],[x,travelY,routeZ],[cx,travelY,routeZ],[cx,travelY,cz+12],[cx,bottom,cz+12-delta],[cx,bottom,cz+2]]);
+   part=name+'_lift_driver';rep(P(cx,bottom,cz+1),'north');edge(P(cx,bottom,cz+2),P(cx,bottom,cz+1));edge(P(cx,bottom,cz+1),P(cx,bottom,cz));column(name+'_lift',cx,cz,bottom,target.y);
+   route(name+'_arrive',[[cx,target.y,cz],[target.x-2,target.y,cz]]);part=name+'_arrival_normalizer';rep(P(target.x-1,target.y,cz),'east');edge(P(target.x-2,target.y,cz),P(target.x-1,target.y,cz));edge(P(target.x-1,target.y,cz),target);
+   connections.push({name,source:base.ports['startup_phase_'+phase].bits[0].position,tap:source,destination:target,normalizer:P(target.x-1,target.y,cz),required_high_power:15,phase});delete ports[name];
+  }
+ }
+ const blocks=[...map.values()],box={from:{},to:{}};for(const axis of['x','y','z']){box.from[axis]=blocks.reduce((n,v)=>Math.min(n,v.position[axis]),Infinity);box.to[axis]=blocks.reduce((n,v)=>Math.max(n,v.position[axis]),-Infinity);}
+ return{status:'offline_dispatch_actual_shared_clock_partial',blocks,ports,parents,routes,edges,connections,columns,box,metrics:{blocks:blocks.length,stored_state_bits:116,actual_new_clock_connections:connections.length,dimensions:Object.fromEntries(['x','y','z'].map(a=>[a,box.to[a]-box.from[a]+1]))},native_calls:0,world_mutations:0,native_acceptance:false,complete_gpu_layout:false,missing:['Both payload NEXT/capture windows still need actual owner/CAPTURE/init qualification.','Cold/admission clamps and external core-command suppression remain missing; unconditioned state must not run.','Shared-clock geometry does not prove far phase separation or adequate high/low duration; full timing and native acceptance remain missing.','DCR/START/load/core/memory full joins and measured density remain missing.']};
+}
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){const out=process.argv[2];assert(out);mkdirSync(out,{recursive:true});const d=makeDispatchPhaseDistribution();writeFileSync(join(out,'design.json'),JSON.stringify(d)+'\n');console.log(JSON.stringify(d.metrics));}

@@ -1,0 +1,3 @@
+import assert from'node:assert/strict';import{spawnSync}from'node:child_process';import{writeFileSync}from'node:fs';import{fileURLToPath}from'node:url';const here=fileURLToPath(new URL('./',import.meta.url)),results=[];
+for(const[exe,file]of[['python3','check-geometry.py'],['node','check-connections.mjs']]){const r=spawnSync(exe,[here+file],{encoding:'utf8',maxBuffer:1024*1024});assert.equal(r.status,0,file+'\n'+r.stdout+r.stderr);results.push({file,results:r.stdout.trim().split('\n').map(s=>JSON.parse(s))});}
+const report={status:'authored_offline_core_ALU_composition_passed',results,native_calls:0};if(process.argv.includes('--save'))writeFileSync(here+'checks.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));

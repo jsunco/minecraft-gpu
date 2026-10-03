@@ -1,0 +1,29 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {makeRegisterCounterControl} from '../../../../hardware/full-gpu-register-counter-control.mjs';
+import {makeSignalDescent} from '../../../../hardware/full-gpu-signal-descent.mjs';
+import {materializeInstance} from '../../../../hardware/gpu-layout-assembly.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,V={west:[1,0],east:[-1,0],north:[0,1],south:[0,-1]},dirs=Object.values(V),S='minecraft:light_gray_concrete';
+const d=makeRegisterCounterControl();assert.deepEqual(d,JSON.parse(readFileSync(new URL('design.json',import.meta.url))));
+function inspect(d){const m=new Map(d.blocks.map(v=>[K(v.position),v])),at=p=>m.get(K(p)),old=new Set(d.parents.map(p=>p.id));assert.equal(m.size,d.blocks.length);let descents=0,locks=0;
+ for(let bit=0;bit<4;bit++){const y=1+8*bit,base=-8-4*bit,ref=materializeInstance(makeSignalDescent({drop:y-base}),{id:'x',translation:P(80+12*bit,y,-20)});for(const v of ref.blocks){assert.deepEqual(at(v.position)?.block,v.block);descents++;}const c=d.columns[bit];assert.equal(c.name,'guard_lift_'+bit);assert.equal((c.top-c.bottom-1)/2%2,0,'Guard lift must retain address polarity');const r=P(c.x,c.bottom,c.z-1);assert.equal(at(r)?.block.properties?.facing,'north');}
+ for(const [x,y,z]of[[2,1,1],[14,1,1],[2,9,1],[14,9,1],[2,17,1],[14,17,1],[2,25,1],[14,25,1],[132,1,81],[144,1,81]]){assert.deepEqual(at(P(x,y,z))?.block,{id:'minecraft:repeater',properties:{facing:'south',delay:'1'}});locks++;}
+ // Conservative possible strong-solid influence screen. Same-parent paths were
+ // reviewed in the saved parent maps; every new solid-mediated connection is
+ // enumerated here, including same-signal paths omitted by the dust graph.
+ const interactions=[];for(const solid of d.blocks.filter(v=>v.block.id===S)){const p=solid.position,sources=[],sinks=[];for(const[x,z]of dirs){let v=at(P(p.x-x,p.y,p.z-z)),b=v?.block;if(b?.id==='minecraft:redstone_wire'||['minecraft:repeater','minecraft:comparator'].includes(b?.id)&&JSON.stringify(V[b.properties.facing])===JSON.stringify([x,z]))sources.push(v);v=at(P(p.x+x,p.y,p.z+z));b=v?.block;if(b?.id==='minecraft:redstone_wire'||['minecraft:repeater','minecraft:comparator'].includes(b?.id)&&JSON.stringify(V[b.properties.facing])===JSON.stringify([x,z])||b?.id==='minecraft:redstone_wall_torch'&&JSON.stringify(V[b.properties.facing])===JSON.stringify([-x,-z]))sinks.push(v);}
+ const up=at(P(p.x,p.y+1,p.z)),down=at(P(p.x,p.y-1,p.z));if(up?.block.id==='minecraft:redstone_wire')sources.push(up);if(down?.block.id==='minecraft:redstone_torch')sources.push(down);if(['minecraft:redstone_wire','minecraft:redstone_torch'].includes(up?.block.id))sinks.push(up);if(down?.block.id==='minecraft:redstone_wire')sinks.push(down);
+ for(const a of sources)for(const b of sinks)if(a!==b&&!(a.part===b.part&&old.has(a.part))){const row={solid:K(p),source:K(a.position),sink:K(b.position),source_part:a.part,sink_part:b.part};interactions.push(row);
+ if(a.part===b.part&&a.part.startsWith('guard_lift_')){assert.equal(p.x,a.position.x);assert.equal(p.x,b.position.x);assert.equal(b.position.y,p.y+1);assert(a.block.id==='minecraft:redstone_torch'||a.block.id==='minecraft:repeater');}
+ else if(a.part===b.part&&a.part==='increment_qualified_return'){assert.equal(Math.abs(a.position.y-b.position.y),1);assert.equal(Math.abs(a.position.z-b.position.z),1);}
+ else assert.deepEqual(row,{solid:'50,-3,5',source:'50,-2,5',sink:'50,-4,5',source_part:'increment_qualified_return',sink_part:'counter'});
+ }}
+ assert.equal(interactions.length,39);const cross=interactions.filter(x=>x.source_part!==x.sink_part);assert.equal(cross.length,1);
+ for(const[x,y,z,face]of[[189,1,46,'west'],[190,1,45,'north'],[192,1,46,'west'],[193,1,43,'north'],[194,1,46,'west'],[148,1,80,'west'],[150,1,77,'north'],[152,1,80,'west'],[155,1,78,'east'],[153,1,75,'north'],[153,1,79,'north'],[155,1,80,'west']])assert.equal(at(P(x,y,z))?.block.properties?.facing,face);
+ for(const[x,y,z]of[[190,1,46],[153,1,80]])assert.deepEqual(at(P(x,y,z))?.block,{id:'minecraft:comparator',properties:{facing:'west',mode:'subtract'}});
+ return{preserved_compact_descent_cells:descents,real_storage_lock_directions:locks,enumerated_new_solid_mediated_paths:interactions.length,same_signal_extra_support_injection:cross[0]};}
+const checks=inspect(d);let cases=0;for(let a=0;a<16;a++)for(let s=0;s<2;s++)for(let z=0;z<2;z++)for(let b=0;b<2;b++)for(let set=0;set<2;set++)for(let clear=0;clear<2;clear++)for(let init=0;init<2;init++){
+ const row12=[0,0,1,1].every((v,i)=>(a>>i&1)===v),increment=!!s||!!z&&!row12,boot=(!!b||!!set)&&!(clear||init);
+ assert.equal(increment,Boolean(s||(z&&a!==12)));assert.equal(boot,Boolean((b||set)&&!clear&&!init));if(init)assert.equal(boot,false);cases++;}
+let negatives=0;for(const f of[c=>c.blocks.find(v=>K(v.position)==='176,-12,39').block.properties.facing='south',c=>c.blocks.find(v=>K(v.position)==='144,1,81').block.properties.facing='north',c=>c.blocks.find(v=>K(v.position)==='153,1,80').block.properties.mode='compare',c=>c.blocks.push({position:P(50,-3,6),block:{id:'minecraft:redstone_torch'},part:'foreign_inverter'})]){const c=structuredClone(d);f(c);assert.throws(()=>inspect(c));negatives++;}
+console.log(JSON.stringify({status:'independent_static_counter_control_checks_pass',blocks:d.blocks.length,...checks,independent_settled_qualifier_boot_cases:cases,corruptions_refused:negatives,native_acceptance:false,limits:['Conservative possible-power contacts and settled Boolean cases are not scheduled Minecraft timing.','Extra INC support feed is same-polarity but may alter propagation strength/timing.','Microstate intents and all ten OPEN producers remain unconnected; stable decoded sampling and initialization margins are still required.']}));

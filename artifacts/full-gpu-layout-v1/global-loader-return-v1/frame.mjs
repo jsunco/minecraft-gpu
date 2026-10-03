@@ -1,0 +1,6 @@
+// Complete accepted loader/global parent plus an exact concurrent READY obstacle.
+import assert from'node:assert/strict';import{readFileSync}from'node:fs';import{createHash}from'node:crypto';import{fileURLToPath}from'node:url';import{loadBase as parentBase,pins as parentPins}from'../loader-global-delivery-v1/frame.mjs';
+export const H=new URL('./',import.meta.url),ROOT=new URL('../../../',H),pins={},K=p=>`${p.x},${p.y},${p.z}`;
+export function read(n,expected){const p=new URL(n,H),b=readFileSync(p),h=createHash('sha256').update(b).digest('hex');if(expected)assert.equal(h,expected,n);pins[fileURLToPath(p).slice(fileURLToPath(ROOT).length)]=h;return JSON.parse(b);}
+export function loadBase(){const b=parentBase();Object.assign(pins,parentPins);const d=read('../loader-global-delivery-v1/delta.json','93edff164f6cd1be2ef503efb5dad1415c580548517d10648bcafc733f59e606');for(const r of d.new_cells){assert(!b.world.has(K(r.position)));b.world.set(K(r.position),r.block);b.rows.push(r);}assert.equal(b.world.size,2135072);return b;}
+export function loadFrame({reserve=true}={}){const b=loadBase();if(reserve){const d=read('ready-reservation.json');for(const r of d.blocks){assert(!b.world.has(K(r.position)));b.world.set(K(r.position),r.block);b.rows.push(r);}b.reservation=d;}return b;}

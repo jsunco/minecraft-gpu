@@ -1,0 +1,8 @@
+import assert from 'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{resolve,relative,dirname}from'node:path';import{fileURLToPath}from'node:url';import{createHash}from'node:crypto';
+const base=dirname(fileURLToPath(import.meta.url)),root=resolve(base,'../../..'),files=new Set();
+function collect(p){p=resolve(p);if(files.has(p))return;assert(p.startsWith(root+'/'));files.add(p);if(!p.endsWith('.mjs'))return;for(const m of readFileSync(p,'utf8').matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/g))collect(resolve(dirname(p),m[1]));}
+for(const p of['prepare.mjs','routes.json','check.mjs','check-boundaries.mjs','prepare-manifest.mjs','README.md','design.json','checks.json','boundary-checks.json'])collect(resolve(base,p));
+for(const p of['control-commit-v2/design.json','control-commit-v2/source-manifest.json','control/ERRATA.md'])collect(resolve(base,'..',p));
+const source_sha256=Object.fromEntries([...files].sort().map(p=>[relative(root,p),createHash('sha256').update(readFileSync(p)).digest('hex')]));
+const r={status:'source_bound_connected_pc_flags_initialization_checkpoint',source_sha256,native_acceptance:false,independent_review:false,complete_controller:false,selected_density_layout:false,scope:'Twenty real data-zero clamps and phased PC/flag initialization OPEN routes; remote startup/admission, complete ALU and RF composition remain pending.'};
+const p=resolve(base,'source-manifest.json');if(process.argv.includes('--check'))assert.deepEqual(r,JSON.parse(readFileSync(p)));else writeFileSync(p,JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify({files:files.size,sha256:createHash('sha256').update(readFileSync(p)).digest('hex')}));

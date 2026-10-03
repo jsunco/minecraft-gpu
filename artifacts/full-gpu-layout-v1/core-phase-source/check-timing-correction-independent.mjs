@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+const sha=b=>createHash('sha256').update(b).digest('hex'),old=JSON.parse(readFileSync(new URL('source-manifest-before-timing-correction.json',import.meta.url))),d=JSON.parse(readFileSync(new URL('design.json',import.meta.url)));
+const run=spawnSync(process.execPath,[fileURLToPath(new URL('check-independent.mjs',import.meta.url))],{encoding:'utf8'});assert.equal(run.status,0,run.stderr);const r=JSON.parse(run.stdout),n=d.nominal_component_sums;
+assert.deepEqual([n.phase_a_width_ticks,n.phase_b_width_ticks,n.a_to_b_gap_ticks,n.b_to_a_gap_ticks],[r.nominal_branch_component_sums.phase_a_width,r.nominal_branch_component_sums.phase_b_width,r.nominal_branch_component_sums.a_to_b_gap,r.nominal_branch_component_sums.b_to_a_gap]);assert.equal(n.direct_to_b_extra_ticks,4);
+const restored=structuredClone(d);restored.nominal_component_sums={half_cycle_ticks:n.half_cycle_ticks,cycle_ticks:n.cycle_ticks,direct_fork_ticks:n.direct_fork_ticks,delayed_fork_ticks:n.delayed_fork_ticks,pulse_ticks:544,closed_gap_ticks:1036,basis:n.basis};assert.equal(sha(JSON.stringify(restored)+'\n'),old.pins['artifacts/full-gpu-layout-v1/core-phase-source/design.json'],'Changes must be exactly the nominal metadata correction; block geometry remains byte-equivalent');
+const topology={...r,status:'independent_static_topology_pass',limits:r.limits.filter((_,i)=>i!==1)};
+console.log(JSON.stringify({status:'independently_checked_static_topology_and_corrected_component_metadata',manifest_sha256:r.manifest_sha256,unchanged_physical_blocks:d.blocks.length,exact_old_design_recovered_by_metadata_only_reversal:true,branch_component_sums:r.nominal_branch_component_sums,topology_checks:topology,native_acceptance:false}));

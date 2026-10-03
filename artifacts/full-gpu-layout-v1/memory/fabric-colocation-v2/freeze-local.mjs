@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const H=new URL('./',import.meta.url),ROOT=new URL('../../../../',H),prefix='artifacts/full-gpu-layout-v1/memory/fabric-colocation-v2/';
+const hash=p=>createHash('sha256').update(readFileSync(new URL(p,ROOT))).digest('hex');
+const d=JSON.parse(readFileSync(new URL('local-design.json',H))),c=JSON.parse(readFileSync(new URL('local-checks.json',H)));
+assert.equal(c.status,'local_group_static_checks_passed');assert.equal(c.routes.length,40);assert.equal(c.feedback.length,0);assert.equal(c.metrics.cells,145728);
+for(const[n,h]of Object.entries(c.source_sha256))assert.equal(hash(prefix+n),h);
+const source_sha256={...d.source_sha256};
+for(const p of Object.keys(source_sha256))assert.equal(hash(p),source_sha256[p]);
+for(const n of['place-local.mjs','check-local.mjs','local-design.json','local-bodies.json','local-paths.json','local-checks.json','LOCAL_JOINS.md','freeze-local.mjs'])source_sha256[prefix+n]=hash(prefix+n);
+for(const p of['artifacts/full-gpu-layout-v1/control-commit-v2/route.mjs','artifacts/full-gpu-layout-v1/repeater-feedback-census-v1/dependencies.mjs','artifacts/full-gpu-layout-v1/repeater-feedback-census-v1/source-manifest.json'])source_sha256[p]=hash(p);
+const out={status:'source_frozen_partial_local_fabric_static_checkpoint',source_sha256,metrics:d.metrics,complete_fabric:false,selected:false,native_acceptance:false,limits:d.limits};
+writeFileSync(new URL('local-joins-source-manifest.json',H),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify({sha256:hash(prefix+'local-joins-source-manifest.json'),pins:Object.keys(source_sha256).length,...d.metrics}));

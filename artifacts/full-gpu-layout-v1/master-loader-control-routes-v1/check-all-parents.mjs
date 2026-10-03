@@ -1,0 +1,13 @@
+// Re-read every actual frozen component to prove slice completeness and delta clearance.
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';
+import{iterateObstacles,decodeSlice,sourceBindings,inside}from'../floorplan-v2/obstacles.mjs';
+const d=JSON.parse(readFileSync(new URL('./design.json',import.meta.url))),f=JSON.parse(readFileSync(d.obstacle_path)),pins={};for(const[p,h]of Object.entries(f.source_sha256)){assert.equal(createHash('sha256').update(readFileSync(p)).digest('hex'),h,'Source changed '+p);pins[p]=h;}const priorPath='artifacts/full-gpu-layout-v1/master-control-routes-v1/design.json',prior=JSON.parse(readFileSync(priorPath));assert.equal(pins[priorPath],createHash('sha256').update(readFileSync(priorPath)).digest('hex'));assert.deepEqual(pins,d.source_bindings);const K=p=>`${p.x},${p.y},${p.z}`,slice=new Map([...decodeSlice(f)].map(v=>[K(v.position),v])),newKeys=new Set(d.blocks.map(v=>K(v.position)));let parents=0,checked=0,near=0;
+// Every route cell plus all power/contact neighborhoods lies inside verified slice.
+for(const v of d.blocks)for(const a of['x','z'])assert(v.position[a]>=f.bounds[a][0]+3&&v.position[a]<=f.bounds[a][1]-3,'Route halo outside slice');
+for await(const v of iterateObstacles({verify:false})){
+ parents++;assert(!newKeys.has(K(v.position)),'Actual parent collision '+v.instance+' '+K(v.position));
+ if(inside(v.position,f.bounds)){const q=slice.get(K(v.position));assert(q,'Missing slice obstacle '+K(v.position));assert.equal(q.instance,v.instance);assert.deepEqual(q.block,v.block);checked++;}
+}
+for(const row of prior.blocks){const v={...row,instance:'master-control-routes-v1'};parents++;assert(!newKeys.has(K(v.position)),'Prior route collision');if(inside(v.position,f.bounds)){const q=slice.get(K(v.position));assert(q);assert.equal(q.instance,v.instance);assert.deepEqual(q.block,v.block);checked++;}}
+assert.equal(checked,slice.size);assert.equal(checked,f.cell_count);
+const out={status:'all_actual_parent_and_prior_route_cells_rechecked_for_nineteen_loader_and_control_connections',parent_cells:parents,slice_cells_matched:checked,slice_completeness_checked:true,route_neighborhood_margin:3,parent_delta_collisions:0,source_pins_verified:Object.keys(pins).length,design_sha256:createHash('sha256').update(readFileSync(new URL('./design.json',import.meta.url))).digest('hex'),native_acceptance:false,world_mutations:0,limits:['All-parent collision and exact complete-neighborhood evidence only; does not discharge parent asynchronous or timing gaps.']};writeFileSync(new URL('./all-parent-checks.json',import.meta.url),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify(out));

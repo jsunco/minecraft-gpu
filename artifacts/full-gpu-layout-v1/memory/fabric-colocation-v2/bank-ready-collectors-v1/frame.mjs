@@ -1,0 +1,5 @@
+// Frozen shared assembly through four loader/global control deliveries.
+import assert from 'node:assert/strict';import{readFileSync}from'node:fs';import{createHash}from'node:crypto';import{loadBase as previous,pins as previousPins}from'../../../loader-global-delivery-v1/frame.mjs';
+export const H=new URL('./',import.meta.url),pins={},K=p=>`${p.x},${p.y},${p.z}`;
+export function read(n,expected){const b=readFileSync(new URL(n,H)),h=createHash('sha256').update(b).digest('hex');if(expected)assert.equal(h,expected,n);pins[n]=h;return JSON.parse(b);}
+export function loadBase(){const b=previous();Object.assign(pins,previousPins);const delta=read('reserved-loader-global-delta-v1.json','93edff164f6cd1be2ef503efb5dad1415c580548517d10648bcafc733f59e606');read('../../../loader-global-delivery-v1/source-manifest.json','9b2aeb1a9a719f21354db91a9fc0cc8d02b35bde96019dcfc141eed1b017ada3');for(const r of delta.new_cells){assert(!b.world.has(K(r.position)));b.world.set(K(r.position),r.block);b.rows.push(r);}assert.equal(b.world.size,2135072);return b;}

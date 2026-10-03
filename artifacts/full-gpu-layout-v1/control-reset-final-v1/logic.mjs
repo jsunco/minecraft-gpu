@@ -1,0 +1,12 @@
+// Sticky scalar handshakes, not a raw multi-bit binary command decode.
+export function definition(){const inputs=['eligible','request','start','ack','withdraw','release','cleanup','stages_clear','exits_quiet','initialize','fault'],outputs=['ack_D','withdraw_D','release_D','cleanup_D','external_ack_D','withdraw_level','release_level'],products=[],add=(out,literals)=>products.push({out,literals}),live={initialize:false,fault:false};
+ add('ack_D',{...live,eligible:true,request:true,withdraw:false,release:false,cleanup:false});add('ack_D',{...live,ack:true,cleanup:false});
+ add('withdraw_D',{...live,ack:true,request:false,cleanup:false});add('withdraw_D',{...live,withdraw:true,cleanup:false});
+ add('release_D',{...live,withdraw:true,exits_quiet:true,start:false,cleanup:false});add('release_D',{...live,release:true,cleanup:false});
+ add('cleanup_D',{...live,release:true,stages_clear:true});for(const n of['ack','withdraw','release'])add('cleanup_D',{...live,cleanup:true,[n]:true});
+ for(const n of['ack','withdraw','release','cleanup'])add('external_ack_D',{...live,[n]:true});
+ add('withdraw_level',{withdraw:true});add('withdraw_level',{release:true});add('withdraw_level',{cleanup:true});add('release_level',{release:true});add('release_level',{cleanup:true});
+ return{inputs,outputs,products};}
+export const allDefinition=(names,high=true,out='all')=>({inputs:names,outputs:[out],products:[{out,literals:Object.fromEntries(names.map(n=>[n,high]))}]});
+export function eligibilityDefinition(){const inputs=['arch_zero','epochs_zero','intents_zero','locks_closed','rf_ack','scratch_complete','epoch_settled','epoch_enable','arch_stop','initialize','fault'];return{inputs,outputs:['eligible'],products:[{out:'eligible',literals:{arch_zero:true,epochs_zero:true,intents_zero:true,locks_closed:true,rf_ack:true,scratch_complete:true,epoch_settled:true,epoch_enable:false,arch_stop:true,initialize:false,fault:false}}]};}
+export function exitsDefinition(){const inputs=['rf_ack','rf_event_ack','alu_idle','alu_status_low','lsu_ack','program_quiet','program_ready','lsu_quiet','program_valid','decode_valid','request_tail'];return{inputs,outputs:['exits_quiet'],products:[{out:'exits_quiet',literals:{rf_ack:false,rf_event_ack:false,alu_idle:true,alu_status_low:true,lsu_ack:false,program_quiet:true,program_ready:false,lsu_quiet:true,program_valid:false,decode_valid:false,request_tail:false}}]};}

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync}from'node:fs';
+import {makeRfStatus,maskDefinition}from'./prepare.mjs';
+import {equation}from'../control-lsu-v2/logic.mjs';
+import {screen}from'./check-interactions.mjs';
+const read=n=>JSON.parse(readFileSync(new URL(n,import.meta.url))),K=p=>`${p.x},${p.y},${p.z}`,P=(x,y,z)=>({x,y,z});
+const d=makeRfStatus(),base=read('../control-core-guards-v1/design.json'),m=new Map(d.blocks.map(v=>[K(v.position),v])),old=new Map(base.blocks.map(v=>[K(v.position),v])),removed=new Set(d.removed.map(v=>K(v.position)));
+assert.deepEqual(d,read('design.json'));assert.equal(removed.size,4);assert.equal(d.bindings.length,2);assert.equal(d.metrics.held_RF_status_bits,2);assert.equal(d.metrics.retained_bits,1095);
+assert.deepEqual([...removed].sort(),['979,304,2','979,305,2','981,304,2','981,305,2']);let preserved=0;for(const v of base.blocks)if(!removed.has(K(v.position))){assert.deepEqual(m.get(K(v.position))?.block,v.block,'Unexpected parent edit '+K(v.position));preserved++;}
+const W='minecraft:redstone_wire';
+let directions=0;for(const b of d.bindings){const {x,y,z}=b.translation;assert.deepEqual(m.get(K(P(x+2,y+1,z))).block,{id:'minecraft:repeater',properties:{facing:'west',delay:'1'}});assert.deepEqual(m.get(K(P(x+2,y+1,z+1))).block,{id:'minecraft:repeater',properties:{facing:'south',delay:'1'}});assert.equal(m.get(K(P(x+2,y+1,z+2))).block.id,W);assert.equal(m.get(K(b.output)).block.id,W);assert.deepEqual(d.ports.rf[b.name].bits[0].position,b.output);assert.equal(m.get(K(b.input_mask)).block.id,'minecraft:comparator');assert.equal(m.get(K(b.output_mask)).block.id,'minecraft:comparator');directions++;}
+// Both sources are physically connected points on the same delivered RF A bank
+// control, not a frontend phase input with an assumed relationship.
+for(const name of ['reset_ack','event_ack']){const c=d.connections.find(c=>c.name===name+'_RF_local_A');assert.deepEqual(c.source,P(1050,53,name==='reset_ack'?3:6));for(let z=3;z<=6;z++)assert.equal(m.get(K(P(1050,53,z))).block.id,W);assert.deepEqual(d.connections.find(c=>c.name===name+'_raw_to_D').destination,P(1000,name==='reset_ack'?209:305,-72));}
+for(const name of ['held_event_ACK_to_owner_return','held_event_ACK_to_reset_quiet'])assert.deepEqual(d.connections.find(c=>c.name===name).source,d.ports.rf.event_ack.bits[0].position);
+// Raw internal branch aliases stay intact; both external taps are really gone.
+for(const x of[979,981])assert(!m.has(`${x},305,2`));assert.equal(m.get('980,305,1').block.id,W);assert.deepEqual(d.ports.rf.raw_event_ack,base.ports.rf.event_ack);assert.deepEqual(d.ports.rf.raw_reset_ack,base.ports.rf.reset_ack);
+let maskCases=0;for(let a=0;a<2;a++)for(let b=0;b<2;b++){assert.equal(!!equation(maskDefinition(),{not_ready:!!a,not_admitted:!!b}).mask,!!(a||b));maskCases++;}
+// Conditional sampled-state model only: arbitrary binary transition values
+// cannot change an already closed export; settle-before-A is an explicit premise.
+let transitionCases=0;for(let before=0;before<32;before++)for(let after=0;after<32;after++)for(const target of[19,31]){let held=before===target;for(let transient=0;transient<32;transient++){const raw=transient===target;assert.equal(held,before===target);void raw;}held=after===target;assert.equal(held,after===target);transitionCases++;}
+const glitch=[15,31,27,19,17,16];assert(glitch.includes(31)&&glitch.includes(19));for(const target of[19,31]){assert(glitch.some(x=>x===target));assert.notEqual(16,target);}
+// Cold mask dominates both D and Q, even an arbitrary initial held bit.
+let coldCases=0;for(let raw=0;raw<2;raw++)for(let held=0;held<2;held++)for(let ready=0;ready<2;ready++)for(let admitted=0;admitted<2;admitted++){const mask=!ready||!admitted,visible=!!held&&!mask,next=!!raw&&!mask;if(mask){assert(!visible);assert(!next);}coldCases++;}
+const eligible=new Set(base.blocks.filter(v=>v.block.id===W).map(v=>K(v.position)));let oldEdges=0;
+function neighbors(p,map){const out=[];for(const[x,z]of[[1,0],[-1,0],[0,1],[0,-1]])for(const y of[-1,0,1]){const q=P(p.x+x,p.y+y,p.z+z);if(!eligible.has(K(q)))continue;if(y===1&&map.has(K(P(p.x,p.y+1,p.z))))continue;if(y===-1&&map.has(K(P(q.x,q.y+1,q.z))))continue;out.push(K(q));}return out.sort();}
+for(const k of eligible){const p=old.get(k).position,a=neighbors(p,old);assert.deepEqual(neighbors(p,m),a,'Retained wire graph changed '+k);oldEdges+=a.length;}
+function validateBoundary(candidate,blocks){for(const x of[979,981])assert(!blocks.has(`${x},305,2`),'Raw outward diode reintroduced');for(const name of['reset_ack','event_ack']){const c=candidate.connections.find(v=>v.name===name+'_RF_local_A');assert.deepEqual(c.source,P(1050,53,name==='reset_ack'?3:6));const b=candidate.bindings.find(v=>v.name===name),t=b.translation;assert.deepEqual(blocks.get(K(P(t.x+2,t.y+1,t.z+1))).block,{id:'minecraft:repeater',properties:{facing:'south',delay:'1'}});}}
+validateBoundary(d,m);let corruptions=0;const changedSource={...d,connections:d.connections.map(c=>c.name==='event_ack_RF_local_A'?{...c,source:P(-52,2,17)}:c)};assert.throws(()=>validateBoundary(changedSource,m));corruptions++;const rawRestored=new Map(m);rawRestored.set('979,305,2',old.get('979,305,2'));assert.throws(()=>validateBoundary(d,rawRestored));corruptions++;const wrongLock=new Map(m),p=P(1010,305,-71);wrongLock.set(K(p),{...m.get(K(p)),block:{id:'minecraft:repeater',properties:{facing:'north',delay:'1'}}});assert.throws(()=>validateBoundary(d,wrongLock));corruptions++;
+const report={status:'author_static_RF_local_held_status_candidate',...d.metrics,preserved_parent_cells:preserved,preserved_old_wire_edges:oldEdges,actual_lock_directions:directions,cold_mask_cases:maskCases+coldCases,conditional_settled_transition_cases:transitionCases,raw_transition_counterexample:glitch,physical_boundary_corruptions:corruptions,...screen(d),native_acceptance:false,phase_timing_proven:false,complete_reset_ack:false};if(process.argv.includes('--save'))writeFileSync(new URL('checks.json',import.meta.url),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({...report,taps:undefined}));

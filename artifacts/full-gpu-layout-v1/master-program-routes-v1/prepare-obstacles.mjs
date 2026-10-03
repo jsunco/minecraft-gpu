@@ -1,0 +1,8 @@
+// Bounded actual geometry for the sixteen core program-address joins.
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';
+import{iterateObstacles,sourceBindings,inside}from'../floorplan-v2/obstacles.mjs';
+const bounds={x:[-630,160],z:[-3120,1090]},pins=await sourceBindings(),cells=[],palette=[],pal=new Map(),names=['loader','core0','core1','dispatch','global','master_control'],counts=Object.fromEntries(names.map(n=>[n,0]));
+function put(row){if(!inside(row.position,bounds))return;const key=JSON.stringify(row.block);if(!pal.has(key)){pal.set(key,palette.length);palette.push(row.block);}const{x,y,z}=row.position;cells.push([x,y,z,pal.get(key),names.indexOf(row.instance)]);counts[row.instance]++;}
+for await(const row of iterateObstacles({bounds,verify:false}))put(row);
+const priorPath='artifacts/full-gpu-layout-v1/master-control-routes-v1/design.json',prior=JSON.parse(readFileSync(priorPath));pins[priorPath]=createHash('sha256').update(readFileSync(priorPath)).digest('hex');for(const row of prior.blocks)put({...row,instance:'master_control'});
+const output={status:'actual_parent_and_previous_route_obstacles',bounds,all_y:true,cell_format:['x','y','z','palette_index','instance_index'],instances:names.map(name=>({name})),palette,cells,counts,cell_count:cells.length,source_sha256:pins,native_acceptance:false};writeFileSync(new URL('./obstacles.json',import.meta.url),JSON.stringify(output)+'\n');console.log(JSON.stringify({cells:cells.length,counts,palette:palette.length,sha256:createHash('sha256').update(readFileSync(new URL('./obstacles.json',import.meta.url))).digest('hex')}));

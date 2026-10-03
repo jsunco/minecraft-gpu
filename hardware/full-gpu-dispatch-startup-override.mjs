@@ -1,0 +1,9 @@
+// Reuse the source-frozen five-bit decoder override geometry for the dispatcher's identical pad interface.
+// It preserves explicit diode substitutions and independent scan paths; no runtime host sequencing.
+import assert from'node:assert/strict';import{mkdirSync,writeFileSync}from'node:fs';import{join,resolve}from'node:path';import{fileURLToPath}from'node:url';import{makeDispatchMaskAssembly}from'./full-gpu-dispatch-mask-assembly.mjs';import{makeRegisterStartupOverride}from'./full-gpu-register-startup-override.mjs';import{makeDispatchMicrodecode}from'./full-gpu-dispatch-microdecode.mjs';import{makeRegisterMicrodecode}from'./full-gpu-register-microdecode.mjs';
+export function makeDispatchStartupOverride(){
+ assert.deepEqual(makeDispatchMicrodecode().ports.state,makeRegisterMicrodecode().ports.state,'Only identical real decoder pad geometry may reuse this override');
+ const d=makeRegisterStartupOverride({registers:makeDispatchMaskAssembly()});
+ return{...d,status:'offline_dispatch_independent_scan_override_partial',reused_geometry:'Exact frozen five-bit normal-mask/scan-mask routing template, with dispatcher parent substituted and every inherited block/interaction rechecked.',stored_state_bits:116,missing:['Actual shared phase delivery and clamping/blanking of dispatch retained state, counters, payloads and all externally visible core signals during conditioning.','Retained switch-back/admission and complete initialization/far-settlement duration.','DCR/global START/loading and complete two-core/memory routes; full timing and native acceptance.']};
+}
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){const out=process.argv[2];assert(out);mkdirSync(out,{recursive:true});const d=makeDispatchStartupOverride();writeFileSync(join(out,'design.json'),JSON.stringify(d)+'\n');console.log(JSON.stringify(d.metrics));}

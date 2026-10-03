@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';
+import{iterateObstacles,decodeSlice,inside,shaFile}from'../floorplan-v3/obstacles.mjs';
+const d=JSON.parse(readFileSync(new URL('./design.json',import.meta.url))),f=JSON.parse(readFileSync(d.obstacle_path)),F='artifacts/full-gpu-layout-v1/floorplan-v3/',m=JSON.parse(readFileSync(F+'source-manifest.json'));
+assert.equal(await shaFile(F+'source-manifest.json'),'a5765a161bdcdc12a766f4dce8bc8309f2ad0c22859a2fcac8157b7f69367602');const pins={...m.files,[F+'source-manifest.json']:await shaFile(F+'source-manifest.json')};assert.deepEqual(d.source_bindings,pins);for(const[p,h]of Object.entries(pins))assert.equal(await shaFile(p),h,p);
+const K=p=>`${p.x},${p.y},${p.z}`,slice=new Map([...decodeSlice(f)].map(v=>[K(v.position),v])),newKeys=new Set(d.blocks.map(v=>K(v.position)));let parents=0,checked=0;
+for(const v of d.blocks)for(const a of['x','z'])assert(v.position[a]>=f.bounds[a][0]+3&&v.position[a]<=f.bounds[a][1]-3,'Route halo outside slice');
+for await(const v of iterateObstacles({verify:false})){parents++;assert(!newKeys.has(K(v.position)),'Actual parent collision '+v.instance+' '+K(v.position));if(inside(v.position,f.bounds)){const q=slice.get(K(v.position));assert(q);assert.equal(q.instance,v.instance);assert.deepEqual(q.block,v.block);checked++;}}
+assert.equal(checked,slice.size);assert.equal(checked,f.cell_count);
+const out={status:'all_actual_frame3_parent_cells_rechecked_for_two_held_core_done_routes',parent_cells:parents,slice_cells_matched:checked,slice_completeness_checked:true,route_neighborhood_margin:3,parent_delta_collisions:0,source_pins_verified:Object.keys(pins).length,design_sha256:await shaFile('artifacts/full-gpu-layout-v1/master-core-done-routes-v1/design.json'),native_acceptance:false,world_mutations:0};
+writeFileSync(new URL('./all-parent-checks.json',import.meta.url),JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify(out));

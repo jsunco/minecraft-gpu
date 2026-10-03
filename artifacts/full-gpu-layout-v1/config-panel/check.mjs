@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {makeConfigPanel} from '../../../hardware/full-gpu-config-panel.mjs';
+import {makeDcr} from '../../../hardware/full-gpu-dcr.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z),D={west:P(1,0,0),east:P(-1,0,0),north:P(0,0,1),south:P(0,0,-1)},dirs=Object.values(D);
+const d=makeConfigPanel(),parent=makeDcr();assert.deepEqual(d,JSON.parse(readFileSync(new URL('./design.json',import.meta.url))));
+const map=new Map(d.blocks.map(v=>[K(v.position),v])),at=p=>map.get(K(p)),solids=new Set(['minecraft:cyan_concrete','minecraft:light_gray_concrete']);
+for(const cell of parent.blocks)assert.deepEqual(at(cell.position).block,cell.block);
+let supports=0,directions=0,sides=0;
+for(const v of d.blocks.filter(v=>v.instance==='gpu/panel')){if(solids.has(v.block.id))continue;assert(solids.has(at({...v.position,y:v.position.y-1})?.block.id));supports++;if(v.block.id==='minecraft:repeater'){const delta=D[v.block.properties.facing];for(const side of dirs.filter(s=>s.x*delta.x+s.z*delta.z===0)){assert(!at(add(v.position,side)),'Panel diode side contact');sides++;}}}
+for(const route of d.routes){const [source,diode,terminal]=route.path;assert.equal(at(source).block.id,'minecraft:lever');assert.deepEqual(add(diode,D[at(diode).block.properties.facing]),terminal);assert.deepEqual(add(source,D[at(diode).block.properties.facing]),diode);assert.equal(at(terminal).block.id,'minecraft:redstone_wire');assert.deepEqual(add(terminal,D[at(route.sink_existing_receiver).block.properties.facing]),route.sink_existing_receiver);directions+=3;}
+for(const name of['global_reset','start']){const port=d.ports[name].bits[0],source=d.switches.find(s=>s.name===(name==='global_reset'?'reset':'start')).position;assert.deepEqual(add(port.source,D[at(port.source).block.properties.facing]),port.position);assert.deepEqual(add(source,D[at(port.source).block.properties.facing]),port.source);directions+=2;}
+// Trace each switch through actual new cells and into the ten DCR terminals.
+// Stops at those terminals; this is not a storage/torch timing model.
+const terminalKeys=new Set(d.routes.map(r=>K(r.path[2]))),network=new Map(d.blocks.filter(v=>(v.instance==='gpu/panel'&&!solids.has(v.block.id))||terminalKeys.has(K(v.position))).map(v=>[K(v.position),v]));
+const leaves=[...d.routes.map(r=>({name:r.net==='dcr_data'?r.net+r.bit:r.net,position:r.path[2]})),...['global_reset','start'].map(name=>({name:name==='global_reset'?'reset':'start',position:d.ports[name].bits[0].position}))];
+let singleSwitchCases=0;
+for(const sw of d.switches){const powers=new Map([[K(sw.position),15]]),queue=[sw.position];for(let i=0;i<queue.length;i++){const p=queue[i],cell=network.get(K(p));const outgoing=cell.block.id==='minecraft:repeater'?[D[cell.block.properties.facing]]:dirs;
+ for(const delta of outgoing){const q=add(p,delta),next=network.get(K(q));if(!next||next.block.id==='minecraft:lever')continue;let level=0;if(next.block.id==='minecraft:redstone_wire')level=powers.get(K(p))-(cell.block.id==='minecraft:redstone_wire'?1:0);else if(next.block.id==='minecraft:repeater'&&K(D[next.block.properties.facing])===K(delta))level=15;else continue;if(level>(powers.get(K(q))??0)){powers.set(K(q),level);queue.push(q);}}
+ }for(const leaf of leaves)assert.equal(powers.get(K(leaf.position))??0,leaf.name===sw.name?15:0,'Wrong switch route '+sw.name+'→'+leaf.name);singleSwitchCases++;}
+// Enumerate every new active-to-parent face. Only the ten intended terminal feeds qualify.
+const intended=new Set(d.routes.map(r=>[K(r.path[1]),K(r.path[2])].sort().join('|')));let boundaryFaces=0;
+for(const v of d.blocks.filter(v=>v.instance==='gpu/panel'&&!solids.has(v.block.id)))for(const delta of[...dirs,P(0,1,0),P(0,-1,0)]){const q=add(v.position,delta),other=at(q);if(other?.instance!=='gpu/dcr'||solids.has(other.block.id))continue;assert(intended.has([K(v.position),K(q)].sort().join('|')),'Unexpected panel/DCR active contact');boundaryFaces++;}
+assert.equal(boundaryFaces,10);
+const sha=p=>createHash('sha256').update(readFileSync(new URL(p,import.meta.url))).digest('hex');const result={status:'offline_panel_connections_checked',blocks:d.blocks.length,preserved_dcr_blocks:parent.blocks.length,new_blocks:d.blocks.length-parent.blocks.length,new_supports:supports,diode_side_faces:sides,directed_route_steps:directions,intended_parent_contact_faces:boundaryFaces,single_switch_routing_and_isolation_cases:singleSwitchCases,connected_bits:10,connected_net_bundles:3,independent_review:false,native_acceptance:false,sources:{generator:sha('../../../hardware/full-gpu-config-panel.mjs'),design:sha('./design.json'),checker:sha('./check.mjs')},limits:['Single-switch propagation covers the actual feeder graph and isolation, not timing or retained DCR behavior.','DCR derivative has separate structural checks and still needs native reset/hold validation.','START/reset external routes and dispatcher sequencing are not included.']};writeFileSync(new URL('./checks.json',import.meta.url),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

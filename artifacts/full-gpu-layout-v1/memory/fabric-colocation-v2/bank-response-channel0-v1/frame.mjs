@@ -1,0 +1,2 @@
+import assert from'node:assert/strict';import{loadBase as prior}from'../bank-response-collectors-v1/source-frame-panel.mjs';import{read}from'./tools.mjs';
+export function loadBase(){read('../bank-response-collectors-v1/source-recovery-manifest.json','ade99e66e4ae2458df64afe0ac58f213fe79b07ec93e3b53fe3c4cd7b4b35a88');read('../../../response-routing-allocation-v1/assignment.json','1b7b3995d1a7cd4c76ea2e784011a526fba8b60634407fe61ccde8d7484ff766');const b=prior();assert.equal(b.world.size,2192740);return b;}

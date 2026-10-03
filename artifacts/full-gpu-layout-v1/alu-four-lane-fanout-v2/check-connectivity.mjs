@@ -1,0 +1,10 @@
+// Pure physical edge reachability at the already screened routing boundaries.
+import assert from 'node:assert/strict';import{readFileSync}from'node:fs';import{fileURLToPath}from'node:url';
+const h=new URL('./',import.meta.url),read=n=>JSON.parse(readFileSync(new URL(n,h))),key=p=>`${p.x},${p.y},${p.z}`;
+const selected=read('qaux-design.json'),blocks=new Map(selected.blocks.map(v=>[key(v.position),v.block])),adj=new Map(),connections=[];
+function edge(a,b){if(!adj.has(a))adj.set(a,new Set());adj.get(a).add(b);}
+for(const n of ['../alu-four-lane-v1/w-choice-height-matched.json','design.json','q-design.json','carry-design.json','qaux-design.json']){const d=read(n);connections.push(...d.connections);for(const e of d.edges){const a=key(e.from),b=key(e.to);edge(a,b);if(blocks.get(a)?.id==='minecraft:redstone_wire'&&blocks.get(b)?.id==='minecraft:redstone_wire')edge(b,a);}}
+const outputs=new Set(connections.map(c=>key(c.target))),sourceGroups=new Map();for(const c of connections){const k=key(c.source);if(!sourceGroups.has(k))sourceGroups.set(k,new Set());sourceGroups.get(k).add(key(c.target));}
+for(const[start,expected]of sourceGroups){const seen=new Set([start]),queue=[start];for(let i=0;i<queue.length;i++)for(const p of adj.get(queue[i])??[])if(!seen.has(p)){seen.add(p);queue.push(p);}assert.deepEqual(new Set([...seen].filter(p=>outputs.has(p))),expected,`Exact physical command destinations from ${start}`);}
+assert.equal(connections.length,88);assert.equal(new Set(connections.map(c=>c.name)).size,22);assert.equal(sourceGroups.size,18);for(const name of new Set(connections.map(c=>c.name)))assert.deepEqual(connections.filter(c=>c.name===name).map(c=>c.lane).sort(),[0,1,2,3]);
+console.log(JSON.stringify({status:'actual_source_to_receiving_pad_edges_exact',logical_commands:22,distinct_physical_sources:18,destinations:88,wrong_command_destinations:0,native_calls:0,transient_or_whole_ALU_correctness:false}));

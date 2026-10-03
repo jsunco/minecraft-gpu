@@ -1,0 +1,20 @@
+// Independent bounded review of the reusable physical state-bank primitive.
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {makeStateBank} from '../../../hardware/full-gpu-state-bank.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,D={west:P(1,0,0),east:P(-1,0,0),north:P(0,0,1),south:P(0,0,-1)},add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z);
+function verify(d){const m=new Map(d.blocks.map(b=>[K(b.position),b.block]));assert.equal(m.size,d.blocks.length);const get=p=>m.get(K(p));let cell=0,link=0;
+ for(const [bankIndex,bank]of d.banks.entries())for(let bit=0;bit<d.metrics.width;bit++){const x=bankIndex*12,y=1+4*bit,l=bank.latches[bit];assert.deepEqual(l.storage,P(x+2,y,0));assert.deepEqual(l.lock,P(x+2,y,1));for(const rx of[1,2,4])assert.deepEqual(get(P(x+rx,y,0)),{id:'minecraft:repeater',properties:{facing:'west',delay:'1'}});assert.deepEqual(add(l.lock,D[get(l.lock).properties.facing]),l.storage);assert.deepEqual(get(P(x+2,y,2)),{id:'minecraft:redstone_wire'});assert.deepEqual(get(l.lock_source),{id:'minecraft:redstone_torch'});assert.deepEqual(bank.data[bit].position,P(x,y,0));assert.deepEqual(bank.out[bit].position,P(x+5,y,0));cell++;}
+ for(const bank of d.banks)for(const open of[false,true]){let power=open;for(let y=0;y<=4*(d.metrics.width-1);y+=2){const x=bank.latches[0].storage.x;assert.equal(get(P(x,y,3)).id,'minecraft:light_gray_concrete');assert.equal(get(P(x,y+1,3)).id,'minecraft:redstone_torch');power=!power;if(y%4===0)assert.equal(power,!open);}}
+ for(const edge of d.links){const y=1+4*edge.bit;assert.deepEqual(edge.path,Array.from({length:8},(_,i)=>P(i+5,y,0)));let strength=15;for(let x=6;x<=12;x++){const b=get(P(x,y,0));if(x===11){assert.deepEqual(b,{id:'minecraft:repeater',properties:{facing:'west',delay:'1'}});strength=15;}else{assert.equal(b.id,'minecraft:redstone_wire');strength--;}assert(strength>0);}link++;}
+ // All same-height diode side contacts must be exactly a listed store+lock.
+ const allowed=new Set(d.banks.flatMap(b=>b.latches.map(l=>[K(l.storage),K(l.lock)].sort().join('|'))));let side=0;
+ for(const b of d.blocks.filter(b=>b.block.id==='minecraft:repeater')){const v=D[b.block.properties.facing];for(const n of Object.values(D).filter(n=>n.x*v.x+n.z*v.z===0)){const p=add(b.position,n),other=get(p);if(!other||other.id==='minecraft:light_gray_concrete')continue;assert(allowed.has([K(b.position),K(p)].sort().join('|')));side++;}}
+ return{cells:cell,connected_bits:link,side_contacts:side};
+}
+const variants=[];for(let width=1;width<=8;width++)for(const pair of[false,true])variants.push({width,pair,blocks:makeStateBank({width,pair}).blocks.length,...verify(makeStateBank({width,pair}))});
+let negatives=0;for(const change of[d=>d.blocks.find(b=>K(b.position)==='2,1,1').block.properties.facing='north',d=>d.blocks.find(b=>K(b.position)==='1,1,0').block.properties.facing='east',d=>d.blocks.find(b=>K(b.position)==='11,1,0').block.properties.facing='east',d=>d.blocks.splice(d.blocks.findIndex(b=>K(b.position)==='2,3,3'),1)]){const d=makeStateBank();change(d);assert.throws(()=>verify(d));negatives++;}
+const sha=p=>createHash('sha256').update(readFileSync(new URL(p,import.meta.url))).digest('hex');
+const report={status:'independently_checked_offline_state_bank_primitive',source_sha256:{'hardware/full-gpu-state-bank.mjs':sha('../../../hardware/full-gpu-state-bank.mjs'),'artifacts/full-gpu-layout-v1/control-core-v1/state-bank-independent-check.mjs':sha('./state-bank-independent-check.mjs')},variants,corruptions_refused:negatives,native_acceptance:false,limits:['No native latch retention, torch startup/burnout or measured OPEN/closure timing.','Physical initialization, action blanking and nonoverlapping actual local bank openings remain controller responsibilities.','No controller or autonomous transition implemented by this bank itself.']};
+if(process.argv.includes('--save'))writeFileSync(new URL('state-bank-independent-review.json',import.meta.url),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({...report,variants:variants.length},null,2));

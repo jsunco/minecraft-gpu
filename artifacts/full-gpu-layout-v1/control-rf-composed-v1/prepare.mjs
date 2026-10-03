@@ -1,0 +1,44 @@
+// Single-copy composition with the actual RF startup/four-file derivative.
+// Pure geometry; no service construction, clocks driven by host, or native calls.
+import assert from 'node:assert/strict';import{readFileSync,writeFileSync,existsSync}from'node:fs';import{createHash}from'node:crypto';import{pathToFileURL}from'node:url';
+import{materializeInstance}from'../../../hardware/gpu-layout-assembly.mjs';
+import{P,K,V,F,searchPath,refreshIndices}from'../control-commit-v2/route.mjs';
+const read=n=>JSON.parse(readFileSync(new URL(n,import.meta.url))),W='minecraft:redstone_wire';
+export function makeComposition({plan=false}={}){
+ const base=read('../control-initialize-v1/design.json'),v2=read('../control-commit-v2/design.json'),v1=read('../control-commit-v1/design.json'),rfUrl=new URL('../register-startup-v1/distribution-v1/design.json',import.meta.url),rfBytes=readFileSync(rfUrl);assert.equal(createHash('sha256').update(rfBytes).digest('hex'),'44ef8a79b8260d1c9151d08f865d169a8b596626af2c5b6346021bd872789a53');
+ const originalRf=read('../register-sequencer-v1/controller-addresses/design.json'),rf=materializeInstance(JSON.parse(rfBytes),{id:'rf_distribution',translation:P(900,53,0)}),m1=new Map(v1.blocks.map(b=>[K(b.position),b])),m2=new Map(v2.blocks.map(b=>[K(b.position),b]));
+ const selected=new Set(['alu_reset_request','actual_all_ready','update_kind_high','update_kind_arrival','input_enable2']);
+ const ancestry=v=>{let b=m2.get(K(v.position));if(b?.part==='commit_v1')b=m1.get(K(v.position));return b?.part;},removed=base.blocks.filter(v=>selected.has(ancestry(v))),map=new Map(base.blocks.filter(v=>!selected.has(ancestry(v))).map(v=>[K(v.position),{...v,part:'core_parent'}]));
+ const common=new Map(originalRf.blocks.map(v=>[K(P(v.position.x+900,v.position.y+53,v.position.z)),v])),changed=[];let shared=0;
+ for(const v of rf.blocks){const k=K(v.position),old=map.get(k);if(old){assert(common.has(k),'Unexpected composition overlap '+k+' '+old.part);shared++;if(JSON.stringify(old.block)!==JSON.stringify(v.block)){assert.equal(old.block.id,'minecraft:repeater');assert.equal(v.block.id,'minecraft:comparator');assert.equal(v.block.properties.mode,'subtract');assert.equal(old.block.properties.facing,v.block.properties.facing);changed.push({position:v.position,before:old.block,after:v.block});}}map.set(k,{...v,part:'rf_distribution'});}
+ assert.equal(shared,88807);assert.equal(changed.length,5);assert.equal(common.size,shared);
+ const edges=[...base.edges,...v2.edges,...v1.edges],routes=[],connections=[];let part='';const at=p=>map.get(K(p)),edge=(from,to)=>edges.push({from,to});
+ const put=(p,id,properties)=>{const block={id:'minecraft:'+id,...properties?{properties}:{}},old=at(p);if(old){assert.equal(id,'light_gray_concrete','collision '+part+' '+K(p)+' '+old.part);assert.deepEqual(old.block,block);return;}map.set(K(p),{position:p,block,part});},solid=p=>put(p,'light_gray_concrete'),dev=(p,id,props)=>{solid(P(p.x,p.y-1,p.z));put(p,id,props);},wire=p=>dev(p,'redstone_wire'),rep=(p,d)=>dev(p,'repeater',{facing:F[d],delay:'1'});
+ const cacheUrl=new URL('routes.json',import.meta.url),cache=existsSync(cacheUrl)?read('routes.json'):{},pending=[],reserved=[],step=(p,d,n=1)=>P(p.x+V[d][0]*n,p.y,p.z+V[d][1]*n),reserve=(s,sd,d,ad)=>[...Array.from({length:18},(_,i)=>step(s,sd,i+2)),...Array.from({length:18},(_,i)=>step(d,ad,-i-2))];
+ const connect=(...args)=>pending.push(args);
+ const injections=[];
+ // Four outward branches already occupy each core raw phase pad. A positive
+ // two-inversion tower drives its existing support from below, without
+ // replacing that support or any upper receiver/branch diode.
+ for(const [name,p,portName]of[['phase_a',P(-82,1,16),'startup_phase_a'],['phase_b',P(-62,1,16),'startup_phase_b'],['initialize',P(-100,1,-8),'startup_initialize_request']]){
+  part='below_input_'+name;const input=P(p.x,-4,p.z-2);wire(input);rep(P(p.x,-4,p.z-1),'south');solid(P(p.x,-4,p.z));solid(P(p.x,-5,p.z));put(P(p.x,-3,p.z),'redstone_torch');solid(P(p.x,-2,p.z));put(P(p.x,-1,p.z),'redstone_torch');assert.equal(at(P(p.x,0,p.z))?.block.id,'minecraft:light_gray_concrete');
+  edge(input,P(p.x,-4,p.z-1));edge(P(p.x,-4,p.z-1),P(p.x,-4,p.z));edge(P(p.x,-4,p.z-1),P(p.x,-3,p.z));edge(P(p.x,-3,p.z),P(p.x,-1,p.z));edge(P(p.x,-1,p.z),p);injections.push({name,input,parent_wire:p,parent_support:P(p.x,0,p.z),bottom:P(p.x,-4,p.z),torch1:P(p.x,-3,p.z),middle:P(p.x,-2,p.z),torch2:P(p.x,-1,p.z)});
+  const phaseTap=name==='phase_a'?{route:'phase_a_return',index:203}:name==='phase_b'?{route:'phase_b_return',index:204}:null;
+  const source=phaseTap?JSON.parse(rfBytes).routes.find(r=>r.name===phaseTap.route).path.map(p=>P(p.x+900,p.y+53,p.z))[phaseTap.index]:rf.ports[portName].bits[0].position;
+  if(phaseTap){const path=JSON.parse(rfBytes).routes.find(r=>r.name===phaseTap.route).path.map(p=>P(p.x+900,p.y+53,p.z)),prev=at(path[phaseTap.index-1]);assert.equal(prev.block.id,'minecraft:repeater');assert.equal(at(source).block.id,W);injections.at(-1).shared_source={port:portName,...phaseTap,position:source};}
+  connect('shared_'+name,source,phaseTap?'west':'east',input,'south');
+ }
+
+ function draw(name,source,sd,destination,ad,stubs=false){part=name;assert.equal(at(source)?.block.id,W,'source '+name);assert.equal(at(destination)?.block.id,W,'destination '+name);const first=step(source,sd),start=step(source,sd,2),last=step(destination,ad,-1),end=step(destination,ad,-2);if(stubs){rep(first,sd);wire(start);rep(last,ad);wire(end);edge(source,first);edge(first,start);edge(end,last);edge(last,destination);return;}
+  let path=cache[name]?.path;if(!path){assert(plan,'Missing route '+name);const ignore=[...reserve(source,sd,destination,ad),first,start,last,end,...[first,start,last,end].map(p=>P(p.x,p.y-1,p.z))],forbidden=[first,last].flatMap(p=>Object.values(V).map(([x,z])=>P(p.x+x,p.y,p.z+z))).filter(p=>![source,start,end,destination].some(q=>K(p)===K(q))),r=searchPath(map,start,end,{ignore,reserved,forbidden});path=r.path;cache[name]={source,destination,path,expanded:r.expanded};writeFileSync(cacheUrl,JSON.stringify(cache)+'\n');console.error(name+': '+path.length+' / '+r.expanded);}
+  assert.deepEqual(path[0],start);assert.deepEqual(path.at(-1),end);const refresh=refreshIndices(path);for(let i=1;i<path.length-1;i++){const p=path[i],q=path[i+1];if(refresh.includes(i)){const d=Object.keys(V).find(d=>p.x+V[d][0]===q.x&&p.z+V[d][1]===q.z);rep(p,d);}else wire(p);}for(let i=1;i<path.length;i++)edge(path[i-1],path[i]);routes.push({name,path,refresh_indices:refresh});connections.push({name,source,tap:first,destination,arrival:last});
+ }
+ connect('alu_reset_request',P(-140,1,-2),'west',P(1422,-37,13),'south');
+ connect('actual_all_ready',P(2149,302,160),'east',P(22,41,-4),'south');
+ connect('update_kind_high',P(324,258,-92),'east',P(620,258,-320),'south');
+ const en=v2.connections.find(c=>c.name==='input_enable2');connect(en.name,en.source,'west',en.destination,'south');
+ for(const[,s,sd,d,ad]of pending)reserved.push(...reserve(s,sd,d,ad));for(const a of pending)draw(...a,true);for(const a of pending)draw(...a);
+ const blocks=[...map.values()],box={from:{},to:{}};for(const a of['x','y','z']){box.from[a]=blocks.reduce((n,v)=>Math.min(n,v.position[a]),Infinity);box.to[a]=blocks.reduce((n,v)=>Math.max(n,v.position[a]),-Infinity);}
+ return{status:'single_copy_core_rf_composition_draft',blocks,parents:{core_parent:{blocks:base.blocks.length-removed.length-shared,translation:P(0,0,0)},rf_distribution:{blocks:rf.blocks.length,translation:P(900,53,0)}},ports:{...base.ports,rf:rf.ports},removed_routes:removed,shared_cells:shared,rf_substitutions:changed,input_injections:injections,edges,routes,connections,box,metrics:{blocks:blocks.length,shared_rf_cells:shared,rf_parent_blocks:rf.blocks.length,removed_route_cells:removed.length,rerouted_connections:connections.length,core_alu_parent_retained_bits:347,added_rf_file_bits:512,added_rf_startup_bits:16,union_retained_bits:875},native_acceptance:false,complete_controller:false,missing:['Shared RF clock A/B and initialize request reach the core through actual positive support-injection towers. The global normal-permit/closure admission producer remains missing.','OTHER/dispatch/retained assignment and LSU WAIT remain external.','ALU fanout22 parent remains partial; later ALU revisions require a new composition screen.','Attached route timing, cold decoder conditioning/closure, and full-machine admission are not measured.']};
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){const d=makeComposition({plan:process.argv.includes('--plan')});if(process.argv.includes('--check'))assert.deepEqual(d,read('design.json'));else writeFileSync(new URL('design.json',import.meta.url),JSON.stringify(d)+'\n');console.log(JSON.stringify(d.metrics));}

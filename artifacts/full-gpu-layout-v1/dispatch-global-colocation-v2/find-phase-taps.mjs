@@ -1,0 +1,15 @@
+// Find a concrete three-device isolated branch without changing the v1 net.
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {inputs,active} from '../memory/fabric-colocation-v2/cut-inputs.mjs';
+const H=new URL('./',import.meta.url),raw=readFileSync(new URL('../dispatch-global-colocation-v1/global-feedback-candidate.json',H)),d=JSON.parse(raw),K=p=>`${p.x},${p.y},${p.z}`,P=(x,y,z)=>({x,y,z}),add=(p,v,n=1)=>P(p.x+n*v.x,p.y+n*v.y,p.z+n*v.z),base=new Map(d.blocks.map(v=>[K(v.position),v.block]));
+const directions=[['south',P(0,0,1)],['north',P(0,0,-1)],['east',P(1,0,0)],['west',P(-1,0,0)]],facing={south:'north',north:'south',east:'west',west:'east'};
+function trial(source,dir,v){const w=new Map(base),rows=[],path=[source];for(let i=1;i<=3;i++){const p=add(source,v,i);for(const q of [add(p,P(0,-1,0)),p])if(w.has(K(q)))return null;const support=add(p,P(0,-1,0));w.set(K(support),{id:'minecraft:light_gray_concrete'});const block=i===1?{id:'minecraft:repeater',properties:{facing:facing[dir],delay:'1'}}:{id:'minecraft:redstone_wire'};w.set(K(p),block);rows.push(p,support);path.push(p);}
+ const affected=new Set();for(const p of rows)for(let x=-3;x<=3;x++)for(let y=-3;y<=3;y++)for(let z=-3;z<=3;z++)if(Math.abs(x)+Math.abs(y)+Math.abs(z)<=3)affected.add(K(add(p,P(x,y,z))));
+ let oldChecked=0;for(const k of affected){const b=base.get(k);if(!b||!active(b))continue;const p=P(...k.split(',').map(Number)),old=inputs(base,p).map(K).sort(),now=inputs(w,p).map(K).sort();if(JSON.stringify(old)!==JSON.stringify(now))return null;oldChecked++;}
+ for(let i=1;i<path.length;i++){const actual=inputs(w,path[i]).map(K),allowed=[path[i-1],path[i+1]].filter(Boolean).map(K);if(!actual.includes(K(path[i-1]))||actual.some(p=>!allowed.includes(p)))return null;}
+ return{source,depart:v,first_stub:path.slice(1),old_effective_receivers_checked:oldChecked};
+}
+const choices={};for(const phase of ['a','b']){const names=phase==='a'?['phase_a_root','phase_A_next','phase_A_commands']:['phase_b_root','phase_B_current','phase_B_sample0','phase_B_sample1'];outer:for(const name of names){const r=d.routes.find(v=>v.name===name);const candidates=name.endsWith('_root')?r.path.slice().reverse():r.path;for(const p of candidates){if(base.get(K(p))?.id!=='minecraft:redstone_wire')continue;for(const [dir,v]of directions){const result=trial(p,dir,v);if(result){choices[phase]={...result,existing_path_tap:name};break outer;}}}}assert(choices[phase]);}
+const report={status:'isolated_phase_branch_stubs_actual_effective_input_delta_pass',parent_sha256:createHash('sha256').update(raw).digest('hex'),choices,limits:['Only the three-device stubs are checked here; the full connected derivative must still pass all new and inherited cable inputs.','This is neither a phase width nor a clock timing certificate.']};writeFileSync(new URL('phase-tap-choice.json',H),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(choices));

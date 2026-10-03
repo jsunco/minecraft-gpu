@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{checkMatrix}from'./check-matrix.mjs';import{evaluate}from'./terms.mjs';
+const read=n=>JSON.parse(readFileSync(new URL(n,import.meta.url))),P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,D={west:[1,0],east:[-1,0],north:[0,1],south:[0,-1]};
+const d=read('design.json'),base=read('../control-assignment-v1/design.json'),m=new Map(d.blocks.map(v=>[K(v.position),v]));
+for(const v of base.blocks)assert.deepEqual(m.get(K(v.position))?.block,v.block,'parent '+K(v.position));
+const expected={idle_to_claim:[P(14,1,6),P(-270,57,-125)],permit_to_claim:[P(-142,1,0),P(-264,57,-125)],reset_to_claim:[P(-138,1,-2),P(-258,57,-125)],initialize_to_claim:[P(-100,-4,-10),P(-252,57,-125)],claim_data:[P(-236,64,-115),P(-260,81,-90)],claim_open:[P(-82,-4,14),P(-260,80,-87)],held_other_to_owner:[P(-255,81,-90),P(304,177,-745)],other_complete_to_idle:[P(356,296,-735),P(22,1,-4)]};
+function endpoints(q){assert.equal(q.connections.length,8);for(const c of q.connections){assert.deepEqual([c.source,c.destination],expected[c.name]);const r=q.routes.find(v=>v.name===c.name);for(const [p,s,t]of[[c.tap,c.source,r.path[0]],[c.arrival,r.path.at(-1),c.destination]]){const b=m.get(K(p))?.block;assert.equal(b?.id,'minecraft:repeater');const[x,z]=D[b.properties.facing];assert.deepEqual(s,P(p.x-x,p.y,p.z-z));assert.deepEqual(t,P(p.x+x,p.y,p.z+z));}}}
+endpoints(d);assert.deepEqual(d.ports.start_request.bits[0].position,P(-276,57,-125));assert.equal(d.metrics.retained_bits,876);
+// This finite abstract protocol is a design oracle, not scheduled-block or native
+// evidence. It enforces the hardware interface obligations under held levels.
+let initializationCases=0,protocolCases=0;for(const oldQ of[false,true])for(const start of[false,true])for(const idle of[false,true]){let q=oldQ;q=evaluate({start,idle,permit:true,reset:true,initialize:false}).claim;assert.equal(q,false);q=evaluate({start,idle,permit:true,reset:false,initialize:true}).claim;assert.equal(q,false);initializationCases++;}
+for(let ackDelay=0;ackDelay<4;ackDelay++)for(let lowDelay=0;lowDelay<4;lowDelay++){
+ let state='IDLE',q=evaluate({start:1,idle:1,permit:1,reset:0,initialize:0}).claim,rfRequest=0,rfAck=0,owner='CAPTURE_KIND',r13Assigned=false;assert(q);const kind=0;assert.equal(kind,0);owner='WAIT_ACK';rfRequest=1;
+ for(let t=0;t<ackDelay;t++){assert.equal(rfAck,0);assert.equal(state,'IDLE');assert.equal(r13Assigned,false);}
+ r13Assigned=true;rfAck=1;owner='DROP_REQUEST';rfRequest=0;owner='WAIT_ACK_LOW';
+ for(let t=0;t<lowDelay;t++){assert.equal(state,'IDLE');assert.equal(rfAck,1);}
+ rfAck=0;owner='COMPLETE';const doneOther=owner==='COMPLETE'&&kind===0;assert(doneOther&&r13Assigned&&rfRequest===0&&rfAck===0);state='FETCH';q=evaluate({start:1,idle:state==='IDLE',permit:1,reset:0,initialize:0}).claim;assert.equal(q,false);owner='IDLE';protocolCases++;
+}
+let corruptions=0;for(const name of['other_complete_to_idle','held_other_to_owner']){const q={...d,connections:d.connections.map(v=>structuredClone(v))};q.connections.find(v=>v.name===name).destination=P(22,9,-4);assert.throws(()=>endpoints(q));corruptions++;}
+const r={status:'author_checked_retained_startup_other_boundaries',blocks:d.blocks.length,preserved_parent_cells:base.blocks.length,connections:8,stored_bits_added:1,retained_bits:876,gate:checkMatrix(),reset_or_initialize_capture_cases:initializationCases,abstract_other_handshake_cases:protocolCases,corruptions,native_acceptance:false,measured_timing:false,limits:['The 16 abstract traces specify ACK-high/request-low/ACK-low ordering; they are not timed block simulation.','START, assignment stability, full reset release and permit are still required physical admission obligations.','Initialization must run actual OTHER capture while its data is zero before owner admission.']};
+if(process.argv.includes('--save'))writeFileSync(new URL('boundary-checks.json',import.meta.url),JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify(r));

@@ -1,0 +1,17 @@
+// Actual transport first: preserve physical producer identity and signal polarity.
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{fileURLToPath}from'node:url';import{inputs,active}from'../../memory/fabric-colocation-v2/cut-inputs.mjs';import{evaluate,K}from'../../dispatch-external-bindings-v1/transport-functions.mjs';
+const H=new URL('./',import.meta.url),ROOT=new URL('../../../../',H),pins={},P=(x,y,z)=>({x,y,z}),T=p=>P(p.x+680,p.y,p.z-380);function bytes(n){const p=new URL(n,H),b=readFileSync(p);pins[fileURLToPath(p).slice(fileURLToPath(ROOT).length)]=createHash('sha256').update(b).digest('hex');return b;}const read=n=>JSON.parse(bytes(n)),scope=read('reference-scope.json'),body=read('witness-bodies.json'),inventory=read('inventory.json'),controller=read('../../memory/admission-close-v1/controller.json'),ports=read('../../memory/admission-close-v1/ports.json'),w=new Map([...scope.blocks,...scope.foreign_context].map(v=>[K(v.position),v.block])),bodyKeys=new Set(body.blocks.map(v=>K(v.position)));
+// The seven body CLEAR wire terminals are passive endpoints. Include their
+// real reverse dust contacts so they cannot become invented independent roots.
+const transport=new Set(scope.blocks.filter(v=>active(v.block)&&!bodyKeys.has(K(v.position))).map(v=>K(v.position)));for(const l of body.latches)transport.add(K(l.clear));
+
+ const nodes=[...transport].map(k=>P(...k.split(',').map(Number))),idx=new Map(nodes.map((p,i)=>[K(p),i])),edges=nodes.map(()=>[]),rev=nodes.map(()=>[]),roots=[],rootMap=new Map(),external=[];
+ for(let i=0;i<nodes.length;i++)for(const p of inputs(w,nodes[i])){const j=idx.get(K(p));if(j!==undefined){edges[j].push(i);rev[i].push(j);}else{let r=rootMap.get(K(p));if(r===undefined){r=roots.length;rootMap.set(K(p),r);roots.push(p);}external.push([r,i]);}}
+ const seen=new Uint8Array(nodes.length),order=[];
+ for(let s=0;s<nodes.length;s++)if(!seen[s]){seen[s]=1;const st=[[s,0]];while(st.length){const f=st.at(-1);if(f[1]<edges[f[0]].length){const j=edges[f[0]][f[1]++];if(!seen[j]){seen[j]=1;st.push([j,0]);}}else{order.push(f[0]);st.pop();}}}
+ const comp=new Int32Array(nodes.length).fill(-1),members=[];
+ for(let o=order.length-1;o>=0;o--){const s=order[o];if(comp[s]!==-1)continue;const ci=members.length,todo=[s],m=[];comp[s]=ci;for(let n=0;n<todo.length;n++){const i=todo[n];m.push(i);for(const j of rev[i])if(comp[j]===-1){comp[j]=ci;todo.push(j);}}members.push(m);}
+
+const blockRows=new Map(scope.blocks.map(v=>[K(v.position),v]));const bad=members.filter(m=>m.length>1&&m.some(i=>w.get(K(nodes[i])).id!=='minecraft:redstone_wire')).map(m=>({size:m.length,cells:m.map(i=>({...blockRows.get(K(nodes[i])),position:nodes[i],inputs:inputs(w,nodes[i])}))}));
+bytes('scan-cycles.mjs');
+writeFileSync(new URL('transport-cycle-refusal.json',H),JSON.stringify({status:'actual_original_transport_function_refused_non_wire_cycles',components:bad,source_sha256:pins,metrics:{transport_vertices:nodes.length,components:members.length,non_wire_components:bad.length,non_wire_component_vertices:bad.reduce((n,c)=>n+c.size,0)},scope:'Complete original actual service-quiet transport with seven passive clear terminals included; matrix and SR bodies otherwise held/excluded.',native_acceptance:false},null,2)+'\n');console.log(JSON.stringify({bad_components:bad.length,sizes:bad.map(c=>c.size),first_devices:bad.map(c=>c.cells.filter(v=>v.block.id!=='minecraft:redstone_wire').slice(0,4))}));

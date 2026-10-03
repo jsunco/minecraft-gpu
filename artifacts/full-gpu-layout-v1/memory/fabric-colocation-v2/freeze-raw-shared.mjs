@@ -1,0 +1,8 @@
+import assert from 'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';
+const H=new URL('./',import.meta.url),ROOT=new URL('../../../../',H),prefix='artifacts/full-gpu-layout-v1/memory/fabric-colocation-v2/',read=n=>JSON.parse(readFileSync(new URL(n,H))),hash=p=>createHash('sha256').update(readFileSync(new URL(p,ROOT))).digest('hex');
+const d=read('raw-shared-design.json'),c=read('raw-shared-checks.json');assert.equal(c.status,'raw_shared_fanout_static_checks_passed');assert.equal(c.dags.length,544);assert.equal(c.minimumRear,4);assert.equal(c.feedback.length,0);
+const source_sha256={};for(const [p,h]of Object.entries(d.source_sha256)){const resolved=p.startsWith('artifacts/')?p:prefix+p;assert.equal(hash(resolved),h);source_sha256[resolved]=h;}
+for(const [p,h]of Object.entries(c.source_sha256)){assert.equal(hash(prefix+p),h);source_sha256[prefix+p]=h;}
+for(const n of['raw-shared-checks.json','RAW_SHARED.md','freeze-raw-shared.mjs'])source_sha256[prefix+n]=hash(prefix+n);
+for(const p of['artifacts/full-gpu-layout-v1/repeater-feedback-census-v1/dependencies.mjs','artifacts/full-gpu-layout-v1/control-commit-v2/route.mjs'])source_sha256[p]=hash(p);
+writeFileSync(new URL('raw-shared-source-manifest.json',H),JSON.stringify({status:'source_frozen_partial_raw_fanout_checkpoint',source_sha256,metrics:d.metrics,limits:c.limits,complete_fabric:false,selected:false,native_acceptance:false},null,2)+'\n');console.log(JSON.stringify({sha256:hash(prefix+'raw-shared-source-manifest.json'),pins:Object.keys(source_sha256).length,...d.metrics}));

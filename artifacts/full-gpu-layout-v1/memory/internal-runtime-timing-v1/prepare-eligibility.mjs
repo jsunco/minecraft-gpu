@@ -1,0 +1,5 @@
+import{makeSampledBank}from'../../../../hardware/memory-layout-bank-sampled-admission.mjs';import{writeFileSync,readFileSync}from'node:fs';import{createHash}from'node:crypto';
+const H=new URL('.',import.meta.url),K=p=>`${p.x},${p.y},${p.z}`,prefix=['rv','wv','not_rv','any_valid','candidate','eligible','not_low','read_address','write_address','write_data'];const banks=[];
+for(let i=0;i<4;i++){const d=makeSampledBank({bankIndex:i}),blocks=d.blocks.filter(v=>prefix.some(p=>d.nets[K(v.position)].startsWith(p)));banks.push({bank:i,blocks,sources:['read_valid','write_valid'].flatMap(n=>d.ports[n].positions.slice(0,4)),targets:d.snapshots.slice(0,4).map(s=>s.driver)});}
+const source_sha256={};for(const name of['hardware/memory-layout-bank-sampled-admission.mjs','artifacts/full-gpu-layout-v1/memory/bank-sampled-admission-v1/source-manifest.json'])source_sha256[name]=createHash('sha256').update(readFileSync(new URL('../../../../'+name,H))).digest('hex');
+writeFileSync(new URL('eligibility-slices.json',H),JSON.stringify({banks,source_sha256})+'\n');console.log(JSON.stringify({blocks:banks.map(b=>b.blocks.length)}));

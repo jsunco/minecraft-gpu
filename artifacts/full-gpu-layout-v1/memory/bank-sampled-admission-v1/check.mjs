@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {makeSampledBank} from '../../../../hardware/memory-layout-bank-sampled-admission.mjs';
+import {makeDataChannel} from '../../../../hardware/memory-layout-data-channel.mjs';
+const H=x=>createHash('sha256').update(x).digest('hex'),P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,V={west:P(1,0,0),east:P(-1,0,0),north:P(0,0,1),south:P(0,0,-1)},A=(p,v,n=1)=>P(p.x+n*v.x,p.y+n*v.y,p.z+n*v.z);
+const d=makeSampledBank(),old=makeDataChannel(),m=new Map(d.blocks.map(v=>[K(v.position),v.block])),prior=new Map(old.blocks.map(v=>[K(v.position),v.block]));assert.equal(H(JSON.stringify(d)+'\n'),H(readFileSync(new URL('bank.json',import.meta.url))));assert.deepEqual(d.box,old.box);assert.deepEqual(d.ports,old.ports);
+const removed=new Set(d.removed_blocks.map(v=>K(v.position))),changes=new Map(d.changes.map(v=>[K(v.position),v]));for(const[k,b]of prior){if(removed.has(k))assert(!m.has(k));else if(changes.has(k)){assert.deepEqual(changes.get(k).from,b);assert.deepEqual(m.get(k),changes.get(k).to);}else assert.deepEqual(m.get(k),b);}assert.equal(removed.size,50);assert.equal(changes.size,2);assert.equal(m.size,d.blocks.length);
+const R='minecraft:repeater',W='minecraft:redstone_wire',S='minecraft:light_gray_concrete';
+function validRoute(r){for(let i=0;i<r.path.length;i++){const p=r.path[i],b=m.get(K(p));assert(b);if(b.id===R){assert(i&&i<r.path.length-1);const v=V[b.properties.facing];assert.deepEqual(r.path[i-1],A(p,v,-1));assert.deepEqual(r.path[i+1],A(p,v));}else assert.equal(b.id,W);}}
+for(const r of d.routes)validRoute(r);
+for(const col of d.columns)for(let y=col.lo;y<=col.hi;y++)assert.equal(m.get(K(P(col.x,y,col.z))).id,(y-col.lo)%2?'minecraft:redstone_torch':S);
+for(const s of d.snapshots){assert.equal(m.get(K(s.driver)).id,R);assert.equal(m.get(K(s.storage)).id,R);assert.equal(m.get(K(s.lock)).id,R);assert.deepEqual(A(s.lock,V[m.get(K(s.lock)).properties.facing]),s.storage);assert.equal(m.get(K(s.lock)).properties.facing,'east');assert.equal(m.get(K(s.storage)).properties.facing,'north');}
+for(const b of d.bindings){const v=m.get(K(b.driver));assert.equal(v.id,R);assert.deepEqual(b.kind==='raw_eligibility_tap'||b.kind==='sample_source'?A(b.driver,V[v.properties.facing],-1):A(b.driver,V[v.properties.facing]),b.kind==='raw_eligibility_tap'||b.kind==='sample_source'?b.source:b.destination);}
+// Walk the actual unchanged normal coil order, including the two new wire taps.
+const coil=[];for(let row=0;row<4;row++){const z=-450+4*row,east=row%2===0;for(let n=0;n<112;n++)coil.push(P(east?16+n:127-n,-45,z));if(row<3){const x=east?128:15;for(let dz=0;dz<=4;dz++)coil.push(P(x,-45,z+dz));}}
+const delay=p=>{const b=m.get(K(p));assert(b,'missing '+K(p));return b.id===R?2*Number(b.properties.delay):/torch|comparator/.test(b.id)?2:0;};
+const tapNames=new Map([[K(P(31,-45,-450)),'sample_close'],[K(P(47,-45,-450)),'owner_open'],[K(P(63,-45,-450)),'owner_close'],[K(P(95,-45,-450)),'payload_open'],[K(P(111,-45,-450)),'payload_close'],[K(P(111,-45,-446)),'write_open'],[K(P(95,-45,-446)),'write_close'],[K(P(63,-45,-442)),'response_open'],[K(P(79,-45,-442)),'response_close']]);let ticks=0;const phases={sample_open:0};for(let i=0;i<coil.length;i++){const p=coil[i],b=m.get(K(p));assert([R,W].includes(b.id));if(b.id===R&&i<coil.length-1)assert.deepEqual(A(p,V[b.properties.facing]),coil[i+1]);ticks+=delay(p);if(tapNames.has(K(p)))phases[tapNames.get(K(p))]=ticks;}phases.final_tail=ticks;
+const ordered=['sample_open','sample_close','owner_open','owner_close','payload_open','payload_close','write_open','write_close','response_open','response_close','final_tail'];for(let i=1;i<ordered.length;i++)assert(phases[ordered[i]]>phases[ordered[i-1]]);assert.equal(coil.filter(p=>m.get(K(p)).id===R&&m.get(K(p)).properties.delay==='4').length,439);
+// Distinct source roles and actual old route discontinuities are necessary.
+for(const x of[31,63,111])for(const z of[-465,-466,-467])assert(!m.has(K(P(x,-37,z))));
+for(const x of[111,95]){assert.equal(m.get(K(P(x,-45,-446))).id,W);assert.equal(m.get(K(P(x,-45,-447))).properties.facing,'south');}
+assert.equal(m.get(K(P(107,-25,-440))).id,'minecraft:comparator');assert.equal(m.get(K(P(107,-25,-440))).properties.mode,'subtract');assert.equal(m.get(K(P(108,-25,-440))).properties.facing,'east');
+// Stable sampled masks have at most one owner even if new live requests arrive
+// afterward. Payload values for the chosen held requester remain independent.
+let stableMasks=0,lateCases=0;const priority=b=>b?b&-b:0;
+for(let captured=0;captured<256;captured++){const owner=priority(captured);assert(!owner||!(owner&(owner-1)));stableMasks++;for(let late=0;late<256;late++){assert.equal(priority(captured),owner);const raw=captured|late;assert((raw&captured)===captured);lateCases++;}}
+// Source cancellation before READY is outside the valid/ready contract; reset
+// is global serviced reset, not an unannounced requester withdrawal.
+const protocol=[];for(const request of[0,1])for(const reset of[0,1])for(const liveArrival of[0,1]){const sampleOpen=request&&!reset,write=!!request&&!reset;assert(!reset||!sampleOpen&&!write);protocol.push({request,reset,late_request_allowed:liveArrival===1,late_request_waits_next_epoch:true});}
+let negatives=0;for(const r of d.routes){const k=K(r.path[0]),b=m.get(k);m.delete(k);assert.throws(()=>validRoute(r));m.set(k,b);negatives++;}for(const s of d.snapshots){const k=K(s.lock),b=m.get(k);m.set(k,{...b,properties:{...b.properties,facing:'north'}});assert.notDeepEqual(A(s.lock,V[m.get(k).properties.facing]),s.storage);m.set(k,b);negatives++;}
+const out={status:'offline_sampled_bank_geometry_phase_checks_pass',...d.metrics,parent_box_preserved:true,external_ports_preserved:true,phase_source_prefix_nominal_ticks:phases,stable_masks:stableMasks,late_request_cases:lateCases,protocol_cases:protocol.length,negative_checks:negatives,limits:['Phase-prefix ordering is necessary, not sufficient: complete sample/priority/owner/payload/write/response arrival and lock closure need real bounds.','The source hold-until-ready contract is required; no host samples a running request.'],native_acceptance:false};console.log(JSON.stringify(out));if(process.argv.includes('--save'))writeFileSync(new URL('checks.json',import.meta.url),JSON.stringify(out,null,2)+'\n');

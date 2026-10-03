@@ -1,0 +1,24 @@
+// Bounded independent review of the connected phase/held-command refinement.
+import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';
+import {routeDelays} from '../../../scripts/check-route-delay.mjs';
+const root=new URL('../../../',import.meta.url),read=p=>JSON.parse(readFileSync(new URL(p,root))),sha=p=>createHash('sha256').update(readFileSync(new URL(p,root))).digest('hex'),prefix='artifacts/full-gpu-layout-v1/global-clocked-control-v1/',manifest=read(prefix+'source-manifest.json');
+for(const[p,h]of Object.entries(manifest.files))assert.equal(sha(p),h,p);
+const d=read(prefix+'design.json'),sampled=read('artifacts/full-gpu-layout-v1/global-sampled-control-v1/design.json'),sampler=read('artifacts/full-gpu-layout-v1/global-input-sampler-v1/design.json'),held=read('artifacts/full-gpu-layout-v1/global-held-commands-v1/design.json'),P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,m=new Map(d.blocks.map(v=>[K(v.position),v.block]));
+const block=(p,id,properties)=>assert.deepEqual(m.get(K(p)),{id:'minecraft:'+id,...properties?{properties}:{}},K(p)),W=p=>block(p,'redstone_wire'),R=(p,f)=>block(p,'repeater',{facing:f,delay:'1'});
+function storage(raw,out,lock){W(raw);R(P(raw.x+1,raw.y,raw.z),'west');R(P(raw.x+2,raw.y,raw.z),'west');W(P(raw.x+3,raw.y,raw.z));R(P(raw.x+4,raw.y,raw.z),'west');W(out);assert.deepEqual(lock,P(raw.x+2,raw.y,raw.z+1));R(lock,'south');}
+for(const s of sampler.samples)storage(d.ports[s.name].bits[0].position,s.source,s.lock);
+const names=['cold_initialize','core_reset_force','cold_initialized','launch_permit','memory_admission_block'];
+for(const[i,n]of names.entries()){const out=P(445,1+4*i,0);assert.deepEqual(d.ports[n].bits[0].position,out);storage(P(440,out.y,0),out,P(442,out.y,1));assert.deepEqual(held.connections[i].destination,P(440,out.y,0));}
+assert(!Object.keys(d.ports).some(n=>['next_open','current_open','command_open','phase_B_0','phase_B_1'].includes(n)));
+const targets=[['A_next','a',P(150,0,3)],['A_commands','a',P(440,0,3)],['B_current','b',P(162,0,3)],['B_sample0','b',P(-100,0,3)],['B_sample1','b',P(-100,32,3)]];
+for(const[n,phase,p]of targets){const c=d.connections.find(c=>c.name===n);assert.equal(c.phase,phase);assert.deepEqual(c.destination,p);assert.deepEqual(c.source,phase==='a'?P(293,65,-352):P(293,65,-344));R(c.normalizer,'west');assert.deepEqual(c.normalizer,P(p.x-1,p.y,p.z));}
+// Real B trunk entry normalizer, not an undocumented seeded wire.
+R(P(329,-8,-180),'east');W(P(328,-8,-180));
+// Four actual subtract stages implement A=direct&&!delayed&&!STOP and
+// B=delayed&&!direct&&!STOP, after input-side normalization.
+for(const z of[-352,-344]){for(const x of[285,290])block(P(x,65,z),'comparator',{facing:'west',mode:'subtract'});for(const x of[284,287,289,292])R(P(x,65,z),'west');}
+let clockTruth=0;for(const direct of[0,15])for(const delayed of[0,15])for(const stop of[0,15]){const A=Math.max(Math.max(direct-delayed,0)-stop,0),B=Math.max(Math.max(delayed-direct,0)-stop,0);assert(!(A&&B));assert.equal(A,Number(!!direct&&!delayed&&!stop)*15);assert.equal(B,Number(!!delayed&&!direct&&!stop)*15);clockTruth++;}
+const phases=routeDelays(d);assert.deepEqual(phases.routes.map(r=>r.nominal_max_ticks),[154,140,174,216,256]);assert(phases.routes.every(r=>r.torch_inversions.every(n=>n%2===0)));
+const timing=read(prefix+'nominal-timing-checks.json');assert.equal(timing.physical_data_dependency_paths,92);assert.equal(timing.maximum_combinational_dependency_ticks,574);assert.equal(timing.nominal_B_close_to_A_open_gap_ticks-4-574,318);assert.equal(timing.numeric_physical_bounds_established,false);
+let negatives=0;for(const change of[x=>{x.connections[2].source=x.connections[0].source;},x=>{x.edges=x.edges.filter(e=>K(e.to)!==K(x.connections[0].normalizer));},x=>{x.blocks.find(v=>K(v.position)===K(P(-112,30,12))).block={id:'minecraft:light_gray_concrete'};}]){const c=structuredClone(d);change(c);assert.throws(()=>{const p=routeDelays(c);assert.deepEqual(p.routes.map(r=>r.nominal_max_ticks),[154,140,174,216,256]);});negatives++;}
+console.log(JSON.stringify({status:'independent_connected_global_phase_boundary_checks_pass',source_pins:Object.keys(manifest.files).length,physical_sample_bits:15,held_command_bits:5,actual_phase_endpoints:5,clock_settled_truth_cases:clockTruth,negative_cases:negatives,nominal_data_paths:92,numeric_physical_bounds_established:false,native_acceptance:false,limits:['Sampler source was authored by this reviewer earlier; this independent scope is the parent-owned five predicate joins, held-output/phase assembly and exact source-bound timing arithmetic.','Clock truth is settled binary arithmetic bound to actual normalized subtract stages, not oscillator startup, glitch, pulse or burnout validation.','BOOT, input hold epochs, post-mask witness freshness and final whole-machine destination delays remain explicit prerequisites.']}));

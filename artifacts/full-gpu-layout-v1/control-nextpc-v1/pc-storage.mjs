@@ -1,0 +1,56 @@
+// Shared-core two-source selection and separate next/current PC storage.
+// No services, native calls, world plans or host-run computation.
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,F={east:'west',west:'east',north:'south',south:'north'},V={east:[1,0],west:[-1,0],north:[0,-1],south:[0,1]};
+export function makePcStorage(){
+ const map=new Map(),edges=[],ports={},gates=[],bits=[],rails=[];
+ const edge=(a,b,kind='signal')=>edges.push({from:a,to:b,kind}),join=ps=>{for(let i=1;i<ps.length;i++)edge(ps[i-1],ps[i]);};
+ function put(p,id,props,part){const block={id:'minecraft:'+id,...(props?{properties:props}:{})},old=map.get(K(p));if(old){assert.deepEqual(old.block,block,'collision '+K(p));return;}map.set(K(p),{position:p,block,part});}
+ const solid=(p,part)=>put(p,'light_gray_concrete',undefined,part);
+ function dev(p,id,props,part){solid(P(p.x,p.y-1,p.z),part+'_support');put(p,id,props,part);}
+ const wire=(x,y,z,part)=>dev(P(x,y,z),'redstone_wire',undefined,part),rep=(x,y,z,d,part)=>dev(P(x,y,z),'repeater',{facing:F[d],delay:'1'},part);
+ function line(x1,y,z1,x2,z2,part){assert(x1===x2||z1===z2);const n=Math.abs(x2-x1)+Math.abs(z2-z1),ps=[];for(let i=0;i<=n;i++){const p=P(x1+Math.sign(x2-x1)*i,y,z1+Math.sign(z2-z1)*i);wire(p.x,y,p.z,part);ps.push(p);}join(ps);return ps;}
+ // Positive selected-bit column. Source1 selects immediate; source0 increment.
+ wire(-2,1,0,'select_input');rep(-1,1,0,'east','select_input_isolator');
+ for(let y=1;y<=9;y++)if(y%2)solid(P(0,y,0),'select_column');else put(P(0,y,0),'redstone_torch',undefined,'select_column');join([P(-2,1,0),P(-1,1,0),P(0,1,0)]);
+ for(let row=0;row<2;row++){
+  const y=1+8*row;if(row)dev(P(1,y,0),'redstone_wire',{north:'side',east:'side',south:'side',west:'side'},'mask_source_cross');else wire(1,y,0,'mask_source');edge(P(0,y,0),P(1,y,0),'strong_support_tap');
+  if(row){solid(P(2,y,0),'mask_inverter_support');solid(P(2,y-1,0),'mask_inverter_floor');put(P(3,y,0),'redstone_wall_torch',{facing:'east'},'mask_not');edge(P(1,y,0),P(2,y,0));}
+  else{rep(2,y,0,'east','mask_direct');wire(3,y,0,'mask_direct_wire');join([P(1,y,0),P(2,y,0),P(3,y,0)]);}
+  wire(4,y,0,'mask_pad');rep(5,y,0,'east','mask_normalize');solid(P(6,y,0),'mask_turn_support');solid(P(6,y-1,0),'mask_turn_floor');rep(6,y,1,'south','mask_turn');wire(6,y,2,'mask_turn_pad');join([P(3,y,0),P(4,y,0),P(5,y,0),P(6,y,0),P(6,y,1),P(6,y,2)]);
+  let prev=P(6,y,2);for(let x=7;x<=30;x++){if([14,26].includes(x))rep(x,y,2,'east','mask_refresh');else wire(x,y,2,'mask_row');edge(prev,P(x,y,2));prev=P(x,y,2);}for(let z=3;z<=62;z++){if((z-4)%12===0)rep(30,y,z,'south','mask_refresh');else wire(30,y,z,'mask_rail');edge(prev,P(30,y,z));prev=P(30,y,z);}
+  for(let b=0;b<8;b++){const z=8+8*b;rep(29,y,z-2,'west','mask_branch');const mask=line(28,y,z-2,24,z-2,'mask_branch_wire');rep(24,y,z-1,'south','mask_side');join([P(30,y,z-2),P(29,y,z-2),...mask,P(24,y,z-1),P(24,y,z)]);
+   wire(20,y,z,'data_input');rep(21,y,z,'east','data_isolator');wire(22,y,z,'data_pad');rep(23,y,z,'east','gate_rear');dev(P(24,y,z),'comparator',{facing:'west',mode:'subtract'},'selector_gate');rep(25,y,z,'east','gate_output');join([20,21,22,23,24,25,26].map(x=>P(x,y,z)));
+   gates.push({row,bit:b,data:P(20,y,z),rear:P(23,y,z),mask:P(24,y,z-1),comparator:P(24,y,z),output:P(25,y,z)});
+  }
+ }
+ for(let b=0;b<8;b++){
+  const z=8+8*b;for(let y=1;y<=11;y++)if(y%2)solid(P(26,y,z),'selected_or');else put(P(26,y,z),'redstone_torch',undefined,'selected_or');put(P(26,12,z),'redstone_torch',undefined,'selected_positive');rep(27,12,z,'east','selected_output');wire(28,12,z,'selected_data');join([P(26,12,z),P(27,12,z),P(28,12,z)]);
+  rep(29,12,z,'east','next_driver');rep(30,12,z,'east','next_store');wire(31,12,z,'next_q');join([P(28,12,z),P(29,12,z),P(30,12,z),P(31,12,z)]);
+  rep(30,12,z-1,'south','next_lock');rep(33,12,z-2,'west','next_lock_branch');const nd=line(32,12,z-2,30,z-2,'next_lock_dust');join([P(34,12,z-2),P(33,12,z-2),...nd,P(30,12,z-1)]);edge(P(30,12,z-1),P(30,12,z),'lock_side');
+  // N→C is the only path into current. It rises over the independent N HOLD rail.
+  rep(31,12,z+1,'south','next_export');wire(31,12,z+2,'next_rise');join([P(31,12,z),P(31,12,z+1),P(31,12,z+2)]);let prev=P(31,12,z+2);for(let k=1;k<=4;k++){wire(31+k,12+k,z+2,'next_rise');edge(prev,P(31+k,12+k,z+2));prev=P(31+k,12+k,z+2);}wire(36,16,z+2,'current_data');rep(37,16,z+2,'east','current_driver');rep(38,16,z+2,'east','current_store');wire(39,16,z+2,'current_q');join([prev,P(36,16,z+2),P(37,16,z+2),P(38,16,z+2),P(39,16,z+2)]);
+  rep(38,16,z+3,'north','current_lock');rep(41,16,z+4,'west','current_lock_branch');const cd=line(40,16,z+4,38,z+4,'current_lock_dust');join([P(42,16,z+4),P(41,16,z+4),...cd,P(38,16,z+3)]);edge(P(38,16,z+3),P(38,16,z+2),'lock_side');
+  rep(39,16,z+1,'north','pc_export');const cp=line(39,16,z,33,z,'pc_output_wire');rep(32,16,z,'west','pc_output_isolator');wire(31,16,z,'pc_terminal');join([P(39,16,z+2),P(39,16,z+1),...cp,P(32,16,z),P(31,16,z)]);
+  bits.push({bit:b,selected:P(28,12,z),next_driver:P(29,12,z),next_store:P(30,12,z),next_lock:P(30,12,z-1),next_q:P(31,12,z),current_driver:P(37,16,z+2),current_store:P(38,16,z+2),current_lock:P(38,16,z+3),current_q:P(39,16,z+2),pc:P(31,16,z)});
+ }
+ function hold(x,y,start,end,name){wire(x,y,start-5,name+'_open');rep(x,y,start-4,'south',name+'_isolate');solid(P(x,y,start-3),name+'_inverter');solid(P(x,y-1,start-3),name+'_floor');put(P(x,y,start-2),'redstone_wall_torch',{facing:'south'},name+'_not');wire(x,y,start-1,name+'_pad');rep(x,y,start,'south',name+'_driver');join([P(x,y,start-5),P(x,y,start-4),P(x,y,start-3)]);join([P(x,y,start-2),P(x,y,start-1),P(x,y,start)]);let prev=P(x,y,start);for(let z=start+1;z<=end;z++){if((z-start)%12===0)rep(x,y,z,'south',name+'_refresh');else wire(x,y,z,name+'_rail');edge(prev,P(x,y,z));prev=P(x,y,z);}rails.push({name,input:P(x,y,start-5),start:P(x,y,start),end:P(x,y,end)});}
+ hold(34,12,1,62,'next');hold(42,16,5,68,'current');
+ function port(name,dir,ps){ports[name]={direction:dir,width:ps.length,polarity:'active_high',bit_order:'LSB_first',bits:ps.map((position,bit)=>({bit,position,...(dir==='output'?{high_power:15}:{required_high_power:15})}))};}
+ port('incremented_pc','input',gates.filter(g=>!g.row).map(g=>g.data));port('immediate','input',gates.filter(g=>g.row).map(g=>g.data));port('select_immediate','input',[P(-2,1,0)]);port('next_open','input',[rails[0].input]);port('current_open','input',[rails[1].input]);port('pc','output',bits.map(b=>b.pc));
+ const blocks=[...map.values()],box={from:{},to:{}},histogram={};for(const a of ['x','y','z']){box.from[a]=Math.min(...blocks.map(b=>b.position[a]));box.to[a]=Math.max(...blocks.map(b=>b.position[a]));}for(const b of blocks)histogram[b.block.id]=(histogram[b.block.id]??0)+1;
+ return{status:'shared_pc_current_next_and_selector_offline_unverified',blocks,box,ports,bits,gates,rails,edges,metrics:{blocks:blocks.length,stored_bits:16,selector_sources:2,selector_bits:8,dimensions:Object.fromEntries(['x','y','z'].map(a=>[a,box.to[a]-box.from[a]+1])),histogram},protocol:{prepare:'Both banks closed; current PC stable. Wait for PC+1, all active branch predicates, agreement and selection to settle.',next:'Open NEXT only, capture selected immediate/PC+1. Close NEXT and prove all8 next locks closed before opening CURRENT.',current:'Open CURRENT only from frozen NEXT; next stays closed even after current PC changes and incrementer reacts. Close CURRENT before another NEXT capture.',reset:'With all effects closed and zero held IR immediate, select immediate; perform normal NEXT-close-CURRENT-close sequence. No asynchronous or internal-state forcing.',simultaneous_open:'Forbidden. This component has independent explicit requests; the physical sequencer must enforce nonoverlap. No combinational feedback safety is claimed if both banks open.'},missing:['Actual incrementer/IR/branch-agreement external routes.','Qualified nonoverlap phase generator and lock-arrival barriers.','Memory fetch request/ready handshake and address fanout.'],complete_gpu:false,native_acceptance:false};
+}
+export function checkPcStorage(d){
+ const m=new Map(d.blocks.map(b=>[K(b.position),b]));assert.equal(m.size,d.blocks.length);const allowed=new Set(d.edges.map(e=>[K(e.from),K(e.to)].sort().join('|')));let supports=0,contacts=0,sides=0;
+ for(const b of d.blocks){if(b.block.id.endsWith('_concrete'))continue;let p=P(b.position.x,b.position.y-1,b.position.z);if(b.block.id==='minecraft:redstone_wall_torch'){const v=V[b.block.properties.facing];p=P(b.position.x-v[0],b.position.y,b.position.z-v[1]);}assert.equal(m.get(K(p))?.block.id,'minecraft:light_gray_concrete','support '+K(b.position));supports++;}
+ for(const b of d.blocks.filter(b=>b.block.id==='minecraft:redstone_wire'))for(const[dx,dz]of Object.values(V))for(const dy of [-1,0,1]){const p=P(b.position.x+dx,b.position.y+dy,b.position.z+dz),o=m.get(K(p));if(!o||o.block.id.endsWith('_concrete'))continue;if(dy&&o.block.id!=='minecraft:redstone_wire')continue;if(dy===1&&m.has(K(P(b.position.x,b.position.y+1,b.position.z))))continue;if(dy===-1&&m.has(K(P(p.x,p.y+1,p.z))))continue;assert(allowed.has([K(b.position),K(p)].sort().join('|')),'foreign dust '+K(b.position)+' '+K(p));contacts++;}
+ for(const b of d.blocks.filter(b=>['minecraft:repeater','minecraft:comparator'].includes(b.block.id))){const dir=Object.keys(F).find(d=>F[d]===b.block.properties.facing),[dx,dz]=V[dir];for(const[x,z]of[[dz,dx],[-dz,-dx]]){const p=P(b.position.x+x,b.position.y,b.position.z+z),o=m.get(K(p));if(o&&['minecraft:repeater','minecraft:comparator'].includes(o.block.id))assert(allowed.has([K(b.position),K(p)].sort().join('|')),'foreign diode side '+K(b.position)+' '+K(p));sides++;}}
+ assert.deepEqual(m.get('1,9,0').block.properties,{north:'side',east:'side',south:'side',west:'side'},'one explicit static cross must feed the adjacent inverter support');
+ for(const b of d.bits){for(const [p,face]of[[b.next_lock,'north'],[b.current_lock,'south']])assert.equal(m.get(K(p)).block.properties.facing,face);for(const p of [P(33,12,b.next_store.z-2),P(41,16,b.current_store.z+2)])assert.equal(m.get(K(p)).block.properties.facing,'east');}
+ let cases=0;for(let pc=0;pc<256;pc++)for(let imm=0;imm<256;imm++)for(let s=0;s<2;s++){let current=pc,next=s?imm:(pc+1)&255;const held=next;current=held;assert.equal(current,s?imm:(pc+1)&255);assert.equal(next,held);cases++;}
+ return{status:'author_static_pc_storage_checks_passed',...d.metrics,support_checks:supports,dust_contact_checks:contacts,diode_side_faces:sides,selected_next_state_cases:cases,native_calls:0,limits:['No scheduled-tick model or real propagation proof.','Correctness requires externally produced measured next/current nonoverlap.']};
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){const d=makePcStorage(),r=checkPcStorage(d);if(process.argv.includes('--check'))assert.deepEqual(JSON.parse(readFileSync(new URL('pc-storage.json',import.meta.url))),d);else{writeFileSync(new URL('pc-storage.json',import.meta.url),JSON.stringify(d)+'\n');writeFileSync(new URL('pc-storage-check.json',import.meta.url),JSON.stringify(r,null,2)+'\n');}console.log(JSON.stringify(r,null,2));}

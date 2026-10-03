@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {makeDispatchMicrodecode} from '../../../hardware/full-gpu-dispatch-microdecode.mjs';
+import {makeStateDecoder} from '../../../hardware/full-gpu-state-decoder.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z),D={west:P(1,0,0),east:P(-1,0,0),north:P(0,0,1),south:P(0,0,-1)},dirs=Object.values(D);
+const d=makeDispatchMicrodecode(),baseline=makeDispatchMicrodecode({uniformOutputs:true}),parent=makeStateDecoder();assert.deepEqual(d,JSON.parse(readFileSync(new URL('./design.json',import.meta.url))));
+function check(d){const m=new Map(d.blocks.map(v=>[K(v.position),v])),at=p=>m.get(K(p));let supports=0,directed=0,dustScreens=0,minRear=15;
+ for(const v of parent.blocks)assert.deepEqual(at(v.position).block,v.block,'Parent changed');
+ const newCells=d.blocks.filter(v=>v.part.startsWith('micro'));
+ for(const v of newCells){if(v.block.id==='minecraft:light_gray_concrete')continue;assert.equal(at({...v.position,y:v.position.y-1})?.block.id,'minecraft:light_gray_concrete');supports++;}
+ function rep(p,out){const b=at(p).block;assert.equal(b.id,'minecraft:repeater');assert.deepEqual(add(p,D[b.properties.facing]),out);directed++;}
+ for(const row of d.rows){let power=15;for(let i=1;i<row.path.length;i++){const p=row.path[i],prev=row.path[i-1],b=at(p).block;if(b.id==='minecraft:repeater'){rep(p,{...p,x:p.x+1});minRear=Math.min(minRear,power);power=15;}else{assert.equal(b.id,'minecraft:redstone_wire');if(at(prev).block.id==='minecraft:redstone_wire')power--;}assert(power>0);}
+  for(const p of row.taps){rep(p,{...p,z:p.z-1});assert.equal(at({...p,z:p.z+1}).block.id,'minecraft:redstone_wire');}
+ }
+ for(const c of d.columns)rep(P(c.x,c.output_y,3),c.terminal);
+ const boundary=new Set(d.rows.map(r=>[K(r.path[0]),K(r.path[1])].sort().join('|')));
+ for(const v of newCells.filter(v=>v.block.id==='minecraft:redstone_wire'))for(const delta of dirs){const p=add(v.position,delta),other=at(p);if(other&&!other.part.startsWith('micro')&&!['minecraft:light_gray_concrete','minecraft:redstone_torch'].includes(other.block.id))assert(boundary.has([K(p),K(v.position)].sort().join('|')),'Foreign parent contact');for(const dy of[-1,1]){const q={...p,y:p.y+dy};if(at(q)?.block.id!=='minecraft:redstone_wire')continue;if(dy===1&&at({...v.position,y:v.position.y+1}))continue;if(dy===-1&&at({...q,y:v.position.y}))continue;assert.fail('Unexpected dust slope '+K(v.position));}dustScreens++;}
+ for(const v of newCells.filter(v=>v.block.id==='minecraft:repeater')){const delta=D[v.block.properties.facing];for(const s of dirs.filter(s=>s.x*delta.x+s.z*delta.z===0)){const b=at(add(v.position,s))?.block;assert(!b||!['minecraft:repeater','minecraft:comparator'].includes(b.id),'Accidental side lock');}}
+ let columnCases=0,semanticCases=0;for(let state=0;state<32;state++)for(const c of d.columns){let below=false,torch=false;for(let y=c.first_y;y<=c.last_y+2;y+=2){assert.equal(at(P(c.x,y,4)).block.id,'minecraft:light_gray_concrete');assert.equal(at(P(c.x,y+1,4)).block.id,'minecraft:redstone_torch');const injection=c.states.includes(state)&&y===1+8*state;torch=!(below||injection);below=torch;}assert.equal(torch,c.states.includes(state));for(const name of c.names){assert.equal(torch,d.groups[name].includes(state));semanticCases++;}columnCases++;}
+ return{supports,directed_new_repeater_steps:directed,dust_neighbor_screens:dustScreens,minimum_row_refresh_rear_power:minRear,settled_column_cases:columnCases,settled_semantic_control_cases:semanticCases};
+}
+const result={status:'offline_dispatch_microdecode_static_checks_pass',...d.metrics,...check(d),uniform_full_height_comparison:{blocks:baseline.blocks.length,checks:check(baseline),saved_blocks:baseline.blocks.length-d.blocks.length,scope:'Same complete decoder/row paths/control truths and terminal isolation; trimmed OR columns/terminal heights differ. Excludes still-missing consumer routes and timing.'},sources:Object.fromEntries([['generator','../../../hardware/full-gpu-dispatch-microdecode.mjs'],['design','./design.json'],['checker','./check.mjs']].map(([name,p])=>[name,createHash('sha256').update(readFileSync(new URL(p,import.meta.url))).digest('hex')])),native_acceptance:false,limits:['Control word matrix only; conditional branch sources/state/clock/initialization/full fanout are absent.','Variable output heights reduce local OR geometry, not necessarily the final fully routed controller.','No dynamic timing, state conditioning or physical execution proof.']};writeFileSync(new URL('./checks.json',import.meta.url),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

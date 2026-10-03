@@ -1,0 +1,21 @@
+// Reroute ownership admission: reject any unaccounted tap on the extracted wires.
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{fileURLToPath}from'node:url';import{readLargeDesign,writeLargeDesign}from'../../../hardware/memory-layout-large-json-v2.mjs';
+const B=new URL('../',import.meta.url),K=p=>[p.x,p.y,p.z].join(','),P=(x,y,z)=>({x,y,z}),add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z),W='minecraft:redstone_wire',S='minecraft:light_gray_concrete',R='minecraft:repeater',C='minecraft:comparator';
+const e=JSON.parse(readFileSync(new URL('extraction.json',import.meta.url))),core=readLargeDesign(fileURLToPath(new URL('control-reset-master-compatible-v3/design.json',B))),map=new Map(core.blocks.map(v=>[K(v.position),v])),owned=new Set(e.cluster_cells.map(v=>K(v.position))),fixed=new Set,allowed=new Set;
+for(const r of e.connections){for(const p of [...r.path,r.tap,r.arrival]){owned.add(K(p));owned.add(K(P(p.x,p.y-1,p.z)));}if(!r.source_moves_with_cluster)fixed.add(K(r.source));if(!r.destination_moves_with_cluster)fixed.add(K(r.destination));}
+const preserved=[];for(const name of e.protected_source_prefixes){const r=e.connections.find(c=>c.name===name);assert(r&&!r.source_moves_with_cluster);for(const p of[r.tap,r.path[0]])for(const q of[p,P(p.x,p.y-1,p.z)]){owned.delete(K(q));preserved.push(q);}fixed.add(K(r.path[0]));}
+for(const name of e.protected_destination_suffixes){const r=e.connections.find(c=>c.name===name);assert(r&&!r.destination_moves_with_cluster);for(const p of[r.arrival,r.path.at(-1)])for(const q of[p,P(p.x,p.y-1,p.z)]){owned.delete(K(q));preserved.push(q);}fixed.add(K(r.path.at(-1)));}
+for(const k of fixed)assert(!owned.has(k),'Fixed boundary deleted '+k);
+const active=id=>![S,'minecraft:cyan_concrete','minecraft:lime_concrete'].includes(id),D={west:[1,0],east:[-1,0],north:[0,1],south:[0,-1]},cross=[];
+function contact(p,q){const a=map.get(K(p))?.block,b=map.get(K(q))?.block;if(!a||!b||!active(a.id)||!active(b.id))return false;const dx=q.x-p.x,dy=q.y-p.y,dz=q.z-p.z;if(Math.abs(dx)+Math.abs(dz)!==1||Math.abs(dy)>1)return false;
+ if(dy){if(a.id!==W||b.id!==W)return false;const high=dy>0?p:q;if(map.has(K(P(high.x,high.y+1,high.z))))return false;return true;}
+ if(a.id===W&&b.id===W)return true;
+ if(a.id===W&&[R,C].includes(b.id)){if(b.id===C)return true;const v=D[b.properties.facing];return dx*v[0]+dz*v[1]!==0;}
+ if(b.id===W&&[R,C].includes(a.id)){if(a.id===C)return true;const v=D[a.properties.facing];return dx*v[0]+dz*v[1]!==0;}
+ if([R,C].includes(a.id)&&[R,C].includes(b.id))return true;
+ return false;
+}
+for(const k of owned){const row=map.get(k);assert(row,'Removal absent '+k);if(!active(row.block.id))continue;const p=row.position;for(const[dx,dz]of[[1,0],[-1,0],[0,1],[0,-1]])for(const dy of[-1,0,1]){const q=P(p.x+dx,p.y+dy,p.z+dz);if(!owned.has(K(q))&&contact(p,q))cross.push({inside:p,outside:q,expected_boundary:fixed.has(K(q)),inside_block:row.block,outside_block:map.get(K(q)).block});}}
+const unexpected=cross.filter(v=>!v.expected_boundary);const result={status:unexpected.length?'extraction_has_unaccounted_external_taps':'bounded_route_ownership_contacts_accounted',cluster_cells:e.cluster_cells.length,removed_candidate_cells:owned.size,fixed_boundary_cells:[...fixed],direct_cross_contacts:cross,unaccounted_direct_contacts:unexpected,native_acceptance:false,limits:['This checks direct device/dust boundary ownership. Strong support paths and removed-cap effects still require the later full-parent replacement audit.']};writeFileSync(new URL('ownership-checks.json',import.meta.url),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify({status:result.status,removed:owned.size,cross:cross.length,unexpected:unexpected.slice(0,10)}));
+assert.equal(unexpected.length,0,'Unknown shared route; do not remove it');
+const rest=core.blocks.filter(v=>!owned.has(K(v.position)));assert.equal(rest.length+owned.size,core.blocks.length);writeLargeDesign(fileURLToPath(new URL('obstacles.json',import.meta.url)),{blocks:rest,removed:core.blocks.filter(v=>owned.has(K(v.position))),fixed_boundaries:[...fixed],preserved_source_prefix_cells:preserved,source_sha256:e.source_sha256,complete_gpu_layout:false,native_acceptance:false});

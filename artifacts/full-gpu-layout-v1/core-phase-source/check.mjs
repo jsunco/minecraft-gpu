@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {makeCorePhaseSource} from '../../../hardware/full-gpu-core-phase-source.mjs';
+import {makePhaseClock} from '../../compact-phase-clock-v1/prepare.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,D={west:P(1,0,0),east:P(-1,0,0),north:P(0,0,1),south:P(0,0,-1)},dirs=Object.values(D),add=(a,b)=>P(a.x+b.x,a.y+b.y,a.z+b.z);
+const d=makeCorePhaseSource(),parent=makePhaseClock();assert.deepEqual(d,JSON.parse(readFileSync(new URL('./design.json',import.meta.url))));
+function check(blocks){const m=new Map(blocks.map(v=>[K(v.position),v])),at=p=>m.get(K(p)),g=z=>z-(2*d.settings.pulseCells-16);assert.equal(m.size,blocks.length);let supports=0,inherited=0;
+ for(const v of blocks){if(v.block.id.endsWith('_concrete'))continue;const p=v.block.id.endsWith(':redstone_wall_torch')?add(v.position,D[v.block.properties.facing]):{...v.position,y:v.position.y-1};assert.equal(at(p)?.block.id,'minecraft:light_gray_concrete','Unsupported '+K(v.position));supports++;}
+ // Preserve the entire comparator/crossover/mask motif from the earlier local
+ // clock. Only the former input lever is deliberately converted to wire.
+ for(const v of parent.blocks.filter(v=>v.position.x>=31&&v.position.x<=46&&v.position.z<0)){
+  const p={...v.position,z:g(v.position.z)},expected=structuredClone(v.block);if(expected.id==='minecraft:lever')expected.id='minecraft:redstone_wire',delete expected.properties;
+  assert.deepEqual(at(p)?.block,expected,'Changed comparator or blanking motif '+K(p));inherited++;
+ }
+ let directed=0;
+ function route(name,path){let power=15,ticks=0;for(let i=0;i<path.length;i++){const p=path[i],v=at(p);assert(v,'Missing '+name+' '+K(p));if(i)assert.equal(Math.abs(p.x-path[i-1].x)+Math.abs(p.y-path[i-1].y)+Math.abs(p.z-path[i-1].z),1,name+' disconnected');if(v.block.id==='minecraft:repeater'){const next=path[i+1];assert(next,name+' needs repeater exit');assert.deepEqual(add(p,D[v.block.properties.facing]),next,'Backward '+name+' '+K(p));assert(power>0);power=15;ticks+=2*Number(v.block.properties.delay);directed++;}else{assert.equal(v.block.id,'minecraft:redstone_wire');if(i&&at(path[i-1]).block.id==='minecraft:redstone_wire')power--;assert(power>0,'Signal exhausted '+name+' '+K(p));}}return ticks;}
+ const path=ws=>{const out=[P(...ws[0])];for(let j=1;j<ws.length;j++){const a=ws[j-1],b=ws[j],delta=b.map((v,i)=>v-a[i]);assert.equal(delta.filter(Boolean).length,1);for(let n=1;n<=delta.reduce((v,x)=>v+Math.abs(x),0);n++)out.push(P(...a.map((v,i)=>v+Math.sign(delta[i])*n)));}return out;};
+ const direct=route('direct',path([[2,1,-2],[-10,1,-2],[-10,1,g(-30)],[30,1,g(-30)],[30,1,g(-24)],[33,1,g(-24)]]));
+ const delayed=route('delayed',path([[2,1,-2],[2,1,g(-18)],[30,1,g(-18)],[30,1,g(-16)],[33,1,g(-16)]]));
+ const span=d.settings.loopSpan,loop=route('loop',path([[2,1,0],[span,1,0],[span,1,4],[-2,1,4],[-2,1,0]]));
+ const feedback=at(P(-1,1,0));assert.equal(feedback.block.id,'minecraft:repeater');assert.deepEqual(add(feedback.position,D[feedback.block.properties.facing]),P(0,1,0));assert.deepEqual(at(P(1,1,0)).block.properties,{facing:'east'});
+ const half=loop+2*Number(feedback.block.properties.delay)+2;
+ assert.equal(direct,d.nominal_component_sums.direct_fork_ticks);assert.equal(delayed,d.nominal_component_sums.delayed_fork_ticks);assert.equal(half,d.nominal_component_sums.half_cycle_ticks);
+ assert.equal(d.nominal_component_sums.phase_a_width_ticks,delayed-direct);assert.equal(d.nominal_component_sums.phase_b_width_ticks,delayed-direct-4);assert.equal(d.nominal_component_sums.a_to_b_gap_ticks,half-(delayed-direct)+4);assert.equal(d.nominal_component_sums.b_to_a_gap_ticks,half-(delayed-direct));
+ let sideFaces=0;for(const v of blocks.filter(v=>v.block.id==='minecraft:repeater'&&['oscillator','direct_clock','delayed_clock'].includes(v.part))){const dir=D[v.block.properties.facing];for(const side of dirs.filter(s=>s.x*dir.x+s.z*dir.z===0)){const b=at(add(v.position,side))?.block;assert(!b||b.id.endsWith('_concrete'),'Foreign source-repeater side '+K(v.position));sideFaces++;}}
+ let logicalCases=0;for(const a of[0,1])for(const b of[0,1])for(const inhibit of[0,1]){const A=Math.max(0,Math.max(0,15*a-15*b)-15*inhibit),B=Math.max(0,Math.max(0,15*b-15*a)-15*inhibit);assert(!(A&&B));assert.equal(!!A,!!(a&&!b&&!inhibit));assert.equal(!!B,!!(b&&!a&&!inhibit));logicalCases++;}
+ return{support_checks:supports,preserved_translated_motif_cells:inherited,source_route_directed_repeaters:directed,source_repeater_side_faces:sideFaces,nominal_counted_direct_ticks:direct,nominal_counted_delayed_ticks:delayed,nominal_counted_half_cycle_ticks:half,static_phase_truth_cases:logicalCases};}
+const checks=check(d.blocks);const reverse=structuredClone(d.blocks);reverse.find(v=>K(v.position)==='2,1,-3').block.properties.facing='north';assert.throws(()=>check(reverse));const cut=d.blocks.filter(v=>K(v.position)!=='-10,1,-70');assert.throws(()=>check(cut));assert.throws(()=>makeCorePhaseSource({loopSpan:52,pulseCells:144}));
+const sha=p=>createHash('sha256').update(readFileSync(new URL(p,import.meta.url))).digest('hex');const result={status:'offline_core_phase_source_structure_and_counted_path_checks_pass',blocks:d.blocks.length,...checks,corruption_refusals:2,invalid_timing_setting_refusals:1,sources:{generator:sha('../../../hardware/full-gpu-core-phase-source.mjs'),design:sha('./design.json'),checker:sha('./check.mjs'),parent:sha('../../compact-phase-clock-v1/prepare.mjs')},native_acceptance:false,limits:['Nominal delay arithmetic is not measured timing or a proved bound.','Preserved comparator crossover has unequal paths; dynamic pulse nonoverlap, startup, torch behavior and far-bank lock closure require native traces.','No consumer fanout; a single clock does not finish an autonomous controller.']};writeFileSync(new URL('./checks.json',import.meta.url),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

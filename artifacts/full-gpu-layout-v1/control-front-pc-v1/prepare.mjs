@@ -1,0 +1,32 @@
+// Held instruction fields physically feed a shared PC feedback density baseline.
+import assert from 'node:assert/strict';
+import{readFileSync,writeFileSync}from'node:fs';import{pathToFileURL}from'node:url';
+import{makeFront}from'../control-front-v1/prepare.mjs';import{makePcPaths}from'./pc-paths.mjs';import{materializeInstance}from'../../../hardware/gpu-layout-assembly.mjs';
+const P=(x,y,z)=>({x,y,z}),K=p=>`${p.x},${p.y},${p.z}`,F={east:'west',west:'east',north:'south',south:'north'};
+export function makeFrontPc(){const map=new Map(),parents={},edges=[],routes=[],columns=[],connections=[];let part='';const at=p=>map.get(K(p));
+ function put(p,id,properties){assert(!at(p),'Collision '+part+' '+K(p)+' '+at(p)?.part);map.set(K(p),{position:p,block:{id:'minecraft:'+id,...(properties?{properties}:{})},part});}
+ const solid=p=>put(p,'light_gray_concrete'),dev=(p,id,props)=>{solid({...p,y:p.y-1});put(p,id,props);},wire=p=>dev(p,'redstone_wire'),rep=(p,d)=>dev(p,'repeater',{facing:F[d],delay:'1'}),edge=(a,b)=>edges.push({from:a,to:b});
+ function insert(name,d,translation){const moved=materializeInstance(d,{id:name,translation});for(const v of moved.blocks){assert(!at(v.position),'Parent collision '+name+' '+K(v.position));map.set(K(v.position),{...v,part:name});}parents[name]={blocks:d.blocks.length,translation};return moved;}
+ const front0=makeFront(),pc0=makePcPaths();assert.deepEqual(front0,JSON.parse(readFileSync(new URL('../control-front-v1/design.json',import.meta.url))));assert.deepEqual(pc0,JSON.parse(readFileSync(new URL('./pc-paths.json',import.meta.url))));const front=insert('front',front0,P(0,0,0)),pc=insert('pc_feedback',pc0,P(0,240,-12));
+ function route(name,ws,{branches=[]}={}){part=name;const path=[P(...ws[0])];for(let n=1;n<ws.length;n++){const a=ws[n-1],b=ws[n],delta=b.map((v,i)=>v-a[i]),steps=Math.abs(delta[0])+Math.abs(delta[2]);assert(steps&&(!delta[0]||!delta[2])&&(!delta[1]||Math.abs(delta[1])===steps),'Invalid route '+name);for(let i=1;i<=steps;i++)path.push(P(...a.map((v,k)=>v+Math.sign(delta[k])*i)));}
+  const forbid=new Set(branches.map(K)),candidates=[-1];for(let i=1;i<path.length-1;i++){const a=path[i-1],p=path[i],b=path[i+1];if(!at(p)&&!forbid.has(K(p))&&a.y===p.y&&b.y===p.y&&p.x-a.x===b.x-p.x&&p.z-a.z===b.z-p.z)candidates.push(i);}candidates.push(path.length);const cost=new Map([[-1,0]]),prev=new Map();for(const end of candidates.slice(1))for(const start of candidates){if(start>=end)break;if(!cost.has(start)||end-start>12)continue;const value=cost.get(start)+(end===path.length?0:1);if(value<(cost.get(end)??Infinity)){cost.set(end,value);prev.set(end,start);}}assert(prev.has(path.length),'Unrefreshable '+name);const refresh=[];for(let p=prev.get(path.length);p!==-1;p=prev.get(p))refresh.push(p);
+  for(let i=0;i<path.length;i++){const p=path[i];if(at(p)){assert(i===0||i===path.length-1,'Internal overlap '+name+' '+K(p));assert.equal(at(p).block.id,'minecraft:redstone_wire');}else if(refresh.includes(i)){const q=path[i+1];rep(p,q.x>p.x?'east':q.x<p.x?'west':q.z>p.z?'south':'north');}else wire(p);if(i)edge(path[i-1],p);}routes.push({name,path,refresh_indices:refresh.sort((a,b)=>a-b)});return path;
+ }
+ function lift(name,x,z,bottom,top){part=name;assert.equal((top-bottom)%4,1);for(let y=bottom;y<top;y++)if((y-bottom)%2===0)solid(P(x,y,z));else put(P(x,y,z),'redstone_torch');put(P(x,top,z),'redstone_wire');columns.push({name,x,z,bottom,top,wire_top:true});}
+
+ for(let bit=0;bit<8;bit++){
+  const source=front.ports.immediate.bits[bit],a=source.position,dx=source.travel==='west'?-1:1,x=a.x+2*dx,top=bit<6?154:146,row=pc.ports.immediate.bits[bit].position.z;
+  part='immediate_export_'+bit;rep(P(a.x+dx,1,a.z),dx<0?'west':'east');edge(a,P(a.x+dx,1,a.z));edge(P(a.x+dx,1,a.z),P(x,1,a.z));lift('immediate_source_lift_'+bit,x,a.z,1,top);
+  lift('immediate_arrival_lift_'+bit,6,row,156,249);part='immediate_arrival_feed_'+bit;rep(P(6,156,row-1),'south');edge(P(6,156,row-2),P(6,156,row-1));edge(P(6,156,row-1),P(6,156,row));
+  let ws;if(bit<6)ws=[[x,154,a.z],[x,156,a.z-2],[6,156,row-2]];
+  else if(bit===6)ws=[[x,146,a.z],[x+2,148,a.z],[150,148,a.z],[150,148,row-2],[142,156,row-2],[6,156,row-2]];
+  else ws=[[x,146,a.z],[x+6,152,a.z],[158,152,a.z],[158,152,row-2],[154,156,row-2],[6,156,row-2]];
+  route('held_immediate_'+bit,ws);
+  part='immediate_arrival_export_'+bit;rep(P(7,249,row),'east');wire(P(8,249,row));edge(P(6,249,row),P(7,249,row));edge(P(7,249,row),P(8,249,row));route('immediate_to_selector_'+bit,[[8,249,row],[18,249,row]]);part='immediate_to_selector_'+bit;rep(P(19,249,row),'east');edge(P(18,249,row),P(19,249,row));edge(P(19,249,row),P(20,249,row));
+  connections.push({from:'front.immediate',from_bit:bit,to:'pc_feedback.immediate',to_bit:bit,source:a,destination:pc.ports.immediate.bits[bit].position});
+ }
+ const ports={...front.ports,program_address:pc.ports.program_address,pc:pc.ports.pc,pc_select_immediate:pc.ports.select_immediate,pc_next_open:pc.ports.next_open,pc_current_open:pc.ports.current_open};
+ const blocks=[...map.values()],box={from:{},to:{}};for(const a of['x','y','z']){box.from[a]=Math.min(...blocks.map(v=>v.position[a]));box.to[a]=Math.max(...blocks.map(v=>v.position[a]));}
+ return{status:'offline_connected_front_and_pc_data_routes_draft',blocks,parents,ports,edges,routes,columns,connections,box,metrics:{blocks:blocks.length,stored_bits:41,immediate_connections:8,pc_feedback_connections:16,dimensions:Object.fromEntries(['x','y','z'].map(a=>[a,box.to[a]-box.from[a]+1]))},native_acceptance:false,complete_gpu_layout:false,selected_density_layout:false,missing:['Independent per-lane NZP/predicate routes and corrected active-value agreement, retained fault and PC select/control production.','Physical PC initialization/nonoverlap/closure acknowledgement and UPDATE RF+flags+PC join followed by ALU drain. Explicit PC OPEN inputs are not admitted host actions.','Global program memory routes: current-PC address, valid and16-bit response ownership are concrete boundary pads, not yet wires to the memory assembly.','Native timing/initialization, all32-state conditioning and compact whole-machine placement remain unaccepted.']};
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){const d=makeFrontPc();if(process.argv.includes('--check'))assert.deepEqual(d,JSON.parse(readFileSync(new URL('design.json',import.meta.url))));else writeFileSync(new URL('design.json',import.meta.url),JSON.stringify(d)+'\n');console.log(JSON.stringify(d.metrics));}

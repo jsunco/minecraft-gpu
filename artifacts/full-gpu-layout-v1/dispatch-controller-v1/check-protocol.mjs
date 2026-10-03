@@ -1,0 +1,27 @@
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{nextState,decodedActions,laneMask,BRANCH_STATES,ACTION_STATES}from'../../../hardware/full-gpu-dispatch-microprogram.mjs';
+// This is only an independently scheduled environment/specification replay.
+// It never contacts Minecraft, and is not evidence of physical state storage.
+function run(T,pattern,next=nextState,maskFn=laneMask){const total=Math.ceil(T/4),core=[0,1].map(()=>({start:false,reset:true,ack:false,done:false,block:0,mask:15,resetAge:0,runLeft:0}));let state=0,owner=0,dispatched=0,completed=0,done=false,cycles=0;const launches=[],completions=[],threads=[];let start=false;
+ for(;cycles<40000;cycles++){
+  for(let i=0;i<2;i++){const c=core[i];if(c.reset){c.resetAge++;if(c.resetAge>=3+i){c.ack=true;c.done=false;c.runLeft=0;}}else{c.resetAge=0;c.ack=false;if(c.start&&!c.done&&c.runLeft>0){c.runLeft--;if(c.runLeft===0)c.done=true;}}}
+  if(cycles>=11)start=true;const c=core[owner],p={start,completed:c.start&&c.done,reset_high:c.ack,available:!c.start&&dispatched<total&&c.ack,reset_low:!c.ack,owner,all_done:completed===total,both_reset:core.every(c=>c.ack)},nextS=next(state,p),a=decodedActions(state);
+  if(a.clear_all){owner=0;dispatched=0;completed=0;done=false;for(const c of core){c.start=false;c.reset=true;c.block=0;c.mask=15;}}
+  if(a.lower_start){assert(c.start&&c.done);c.start=false;completions.push(c.block);}
+  if(a.increment_done)completed=(completed+1)&255;
+  if(a.assert_reset)c.reset=true;
+  if(a.capture_payload){assert(!c.start&&c.reset&&c.ack);c.block=dispatched;c.mask=maskFn(T,dispatched+1===total);}
+  if(a.lower_reset){assert(c.reset&&!c.start);c.reset=false;}
+  if(a.raise_start){assert(!c.reset&&!c.ack&&!c.start);assert.equal(c.block,launches.length,'Nonsequential allocation');assert.equal(c.mask,(1<<Math.min(4,T-4*c.block))-1);c.start=true;const latency=pattern===0?1:pattern===1?(owner===0?137:3):pattern===2?(owner===1?139:2):pattern===3?61:1+(c.block*13+owner*17)%113;c.runLeft=latency;launches.push({core:owner,block:c.block,mask:c.mask});for(let lane=0;lane<4;lane++)if(c.mask>>lane&1)threads.push(4*c.block+lane);}
+  if(a.increment_dispatched)dispatched=(dispatched+1)&255;
+  if(a.toggle_owner)owner^=1;
+  if(a.set_done){assert.equal(completed,total);assert.equal(dispatched,total);assert(core.every(c=>!c.start&&c.ack&&c.reset),'Done before reset/drain barrier');done=true;}
+  assert(completed<=dispatched&&dispatched<=total);state=nextS;
+  if(done&&state===23)break;
+ }
+ assert(cycles<40000,'Deadlock');assert(done);assert.equal(launches.length,total);assert.equal(completions.length,total);assert.deepEqual(completions.slice().sort((a,b)=>a-b),Array.from({length:total},(_,i)=>i));assert.deepEqual(threads,Array.from({length:T},(_,i)=>i));if(total)assert.equal(launches[0].core,0);if(total>1)assert.equal(launches[1].core,1);for(let i=0;i<32;i++)assert.equal(nextState(23,{start:i%2}),23);return{cycles,blocks:total,threads:T};}
+let campaigns=0,cycles=0,blocks=0,threads=0,maxCycles=0;for(let T=0;T<256;T++)for(let pattern=0;pattern<5;pattern++){const r=run(T,pattern);campaigns++;cycles+=r.cycles;maxCycles=Math.max(maxCycles,r.cycles);blocks+=r.blocks;threads+=r.threads;}
+let transitionCases=0;for(let state=0;state<32;state++)for(let bits=0;bits<256;bits++){const p=Object.fromEntries(['start','completed','reset_high','available','reset_low','owner','all_done','both_reset'].map((n,i)=>[n,!!(bits>>i&1)]));const n=nextState(state,p);assert(Number.isInteger(n)&&n>=0&&n<32);if(!BRANCH_STATES.includes(state))assert.equal(n,nextState(state,{}));transitionCases++;}
+let maskCases=0;for(let T=0;T<256;T++)for(const last of[0,1]){const expected=!last||!(T&3)?15:(1<<(T&3))-1;assert.equal(laneMask(T,last),expected);maskCases++;}
+let negatives=0;for(const f of[()=>run(17,1,(s,p)=>s===15?15:nextState(s,p)),()=>run(4,0,(s,p)=>s===21?22:nextState(s,p)),()=>run(5,0,nextState,()=>15)]){assert.throws(f);negatives++;}
+const d=JSON.parse(readFileSync(new URL('./design.json',import.meta.url)));for(let b=0;b<5;b++){const expected=Array.from({length:32},(_,s)=>s).filter(s=>!BRANCH_STATES.includes(s)&&(nextState(s,{})>>b&1));assert.deepEqual(d.groups['fixed_next_'+b],expected);}for(const[n,v]of Object.entries(ACTION_STATES))assert.deepEqual(d.groups[n],v);
+const sha=p=>createHash('sha256').update(readFileSync(new URL(p,import.meta.url))).digest('hex'),r={status:'offline_dispatch_specification_replay_pass_not_physical_execution',campaigns,transition_cases:transitionCases,partial_mask_cases:maskCases,abstract_cycles:cycles,max_abstract_campaign_cycles:maxCycles,allocated_blocks:blocks,covered_threads:threads,corruption_refusals:negatives,sources:{microprogram:sha('../../../hardware/full-gpu-dispatch-microprogram.mjs'),matrix:sha('./design.json'),checker:sha('./check-protocol.mjs')},native_calls:0,world_mutations:0,complete_gpu_layout:false,native_acceptance:false,limits:['Pure software specification/environment replay. No claim that unrouted predicates, state or output banks exist.','Five completion patterns cover zero, partial and full workloads; not all asynchronous/reset interruption schedules.','Each abstract cycle assumes ordered qualified actions and closed transfer, not a measured redstone timing bound.','Core reset acknowledgements are modeled and require actual complete reset/drain geometry.']};writeFileSync(new URL('./protocol-checks.json',import.meta.url),JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify(r));

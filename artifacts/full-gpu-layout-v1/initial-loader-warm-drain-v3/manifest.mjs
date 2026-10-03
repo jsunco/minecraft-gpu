@@ -1,0 +1,8 @@
+import assert from'node:assert/strict';import{readFileSync,writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{fileURLToPath}from'node:url';import{resolve}from'node:path';
+const root=fileURLToPath(new URL('../../../',import.meta.url)),prefix='artifacts/full-gpu-layout-v1/initial-loader-warm-drain-v3/',parent='artifacts/full-gpu-layout-v1/initial-loader-height-v2/',read=p=>readFileSync(resolve(root,p)),sha=p=>createHash('sha256').update(read(p)).digest('hex');
+assert.equal(sha(parent+'source-manifest.json'),'96467837003441f79071657bfa3d05c724cc8406c2141e73d02aee4f514475b0');
+const pins=JSON.parse(read(parent+'source-manifest.json')).source_sha256;for(const[p,h]of Object.entries(pins))assert.equal(sha(p),h,p);
+const authored=['prepare.mjs','routes.json','design.json','ports.json','image-source-map.json','logic/terms.mjs','logic/matrix.mjs','logic/check-matrix.mjs','check-geometry.py','check-preservation.py','check-logic.mjs','check-all.mjs','check-warm.mjs','checks.json','warm-check.json','README.md','manifest.mjs'];
+const files=[...Object.keys(pins),parent+'source-manifest.json',...authored.map(n=>prefix+n)],d=JSON.parse(read(prefix+'design.json'));
+const v={status:d.status,source_sha256:Object.fromEntries([...new Set(files)].sort().map(p=>[p,sha(p)])),metrics:d.metrics,box:d.box,whole_gpu_layout:false,native_calls:0,native_acceptance:false},s=JSON.stringify(v,null,2)+'\n';
+if(process.argv.includes('--check'))assert.equal(read(prefix+'source-manifest.json').toString(),s);else writeFileSync(resolve(root,prefix+'source-manifest.json'),s);console.log(JSON.stringify({manifest_sha256:sha(prefix+'source-manifest.json'),source_pins:Object.keys(v.source_sha256).length,blocks:d.blocks.length,box:d.box}));

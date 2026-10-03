@@ -1,0 +1,6 @@
+[submodule "reference/tiny-gpu"]
+	path = reference/tiny-gpu
+	url = https://github.com/adam-maj/tiny-gpu.git
+[submodule "tools/minecraft-redstone"]
+	path = tools/minecraft-redstone
+	url = https://github.com/jsunco/minecraft-redstone.git
