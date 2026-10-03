@@ -1,4 +1,4 @@
-# tiny-gpu in minecraft
+# minecraft gpu
 
 a vanilla redstone recreation of [adam majmudar's tiny-gpu](https://github.com/adam-maj/tiny-gpu): two cores, four lanes each, 8-bit data and the original 16-bit instruction set.
 
@@ -11,8 +11,8 @@ this repo contains the hardware generators, models, tests and current layout wor
 requires python 3.10+ and node 22+.
 
 ```sh
-git clone --recurse-submodules https://github.com/jsunco/tiny-gpu-minecraft.git
-cd tiny-gpu-minecraft
+git clone --recurse-submodules https://github.com/jsunco/minecraft-gpu.git
+cd minecraft-gpu
 python3 -B -m unittest discover -s tests
 python3 -B scripts/check-serial-arithmetic.py
 node hardware/full-gpu-pc-incrementer.mjs artifacts/full-gpu-layout-v1/pc-incrementer
